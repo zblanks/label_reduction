@@ -1,4 +1,4 @@
-include(joinpath(ARGS[1], "reduce_labels_ip.jl"))
+include(joinpath(ARGS[1], "reduce_labels.jl"))
 using CSV
 using DataFrames
 
@@ -19,7 +19,7 @@ function reshape_data(r, t, C::Int, L::Int)
     r = reshape(convert(Array, r[:Column1]), C, 1)
     r = repeat(r, inner=(1, L))
     t = convert(Array, t[:Column1])
-    t = repeat(t, inner=(1, L))
+    t = reshape(t, (size(t)[1], 1))
 
     # Return the data
     return r, t
