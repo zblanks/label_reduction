@@ -51,3 +51,6 @@
 
 # Ignore __pycache__
 __pycache__/
+
+# Ignore .csv files
+*.csv
