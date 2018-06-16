@@ -43,8 +43,8 @@ def train_eval_model(train_data, label_map, is_val_search):
     """
 
     # Get our data and labels
-    y = train_data.target.as_matrix()
-    X = train_data.drop(['target'], axis=1).as_matrix()
+    y = train_data.label.as_matrix()
+    X = train_data.drop(['label'], axis=1).as_matrix()
 
     # Re-map our labels
     y = map_labels(label_map=label_map, orig_labels=y)
@@ -96,8 +96,8 @@ if __name__ == '__main__':
         label_maps[i] = np.loadtxt(path, delimiter=',')
 
     # Get the training and testing data
-    train = pd.read_csv(os.path.join(wd, 'fruits_matrix/train.csv'))
-    test = pd.read_csv(os.path.join(wd, 'fruits_matrix/test.csv'))
+    train = pd.read_csv(os.path.join(wd, 'fruits_matrix/train_encoded.csv'))
+    test = pd.read_csv(os.path.join(wd, 'fruits_matrix/test_encoded.csv'))
 
     # Train all of our models and get the validation score for each
     with Pool() as p:
@@ -112,9 +112,9 @@ if __name__ == '__main__':
     # performance out of sample
     clf = train_eval_model(train_data=train, label_map=label_maps[best_k],
                            is_val_search=False)
-    y_test = test.target.as_matrix()
+    y_test = test.label.as_matrix()
     y_test = map_labels(label_map=label_maps[best_k], orig_labels=y_test)
-    X_test = test.drop(['target'], axis=1)
+    X_test = test.drop(['label'], axis=1)
 
     # Get our test set predictions
     y_pred = clf.predict(X_test)

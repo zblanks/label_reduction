@@ -1,12 +1,65 @@
 from keras.layers import Conv2D, MaxPooling2D, UpSampling2D, Input
-from keras.models import Model, load_model
-from keras.callbacks import CSVLogger, ModelCheckpoint
+from keras.models import Model
+from keras.callbacks import CSVLogger, ModelCheckpoint, EarlyStopping
 from keras.utils import multi_gpu_model
-from keras.preprocessing.image import ImageDataGenerator
+from keras.optimizers import Adam
 import os
 import argparse
-import multiprocessing
+from multiprocessing import Pool
 import numpy as np
+import imageio
+import glob
+import pandas as pd
+
+
+def flatten_list(x):
+    """Flattens a list of lists
+
+    Args:
+        x (list): List of lists
+
+    Returns:
+        list: Flattened list
+    """
+    return [item for sublist in x for item in sublist]
+
+
+def read_imgs(wd, is_train):
+    """Reads in our images
+
+    Args:
+        wd (str): Working directory
+
+    Returns:
+        (ndarray, shape=[None, height, width, 3]): Matrix of image data
+        is_train (bool): Whether we're working with the train or test data
+    """
+
+    # Get all of the directories for our training data
+    directories = os.listdir(os.path.join(wd, 'fruits-360/train'))
+    if is_train:
+        files = [[]] * len(directories)
+        for (i, directory) in enumerate(directories):
+            files[i] = glob.glob(
+                os.path.join(wd, 'fruits-360/train', directory + '/*')
+            )
+    else:
+        files = [[]] * len(directories)
+        for (i, directory) in enumerate(directories):
+            files[i] = glob.glob(
+                os.path.join(wd, 'fruits-360/test', directory + '/*')
+            )
+
+    # Flatten our list
+    files = flatten_list(files)
+
+    # Read in our image data
+    with Pool() as p:
+        imgs = p.map(imageio.imread, files)
+
+    # Get the images into an array and then return our data
+    imgs = np.array(imgs)
+    return imgs
 
 
 def define_model(height, width, n_gpu):
@@ -23,33 +76,36 @@ def define_model(height, width, n_gpu):
 
     # Define our autoencoder model
     img_input = Input(shape=(height, width, 3))
-    x = Conv2D(filters=32, kernel_size=(3, 3), padding='same',
+    x = Conv2D(filters=16, kernel_size=(3, 3), padding='same',
                activation='relu')(img_input)
     x = MaxPooling2D(pool_size=(2, 2), padding='same')(x)
-    x = Conv2D(filters=16, kernel_size=(3, 3), padding='same',
+    x = Conv2D(filters=8, kernel_size=(3, 3), padding='same',
                activation='relu')(x)
     x = MaxPooling2D(pool_size=(2, 2), padding='same')(x)
     x = Conv2D(filters=8, kernel_size=(3, 3), padding='same',
                activation='relu')(x)
     encoded = MaxPooling2D(pool_size=(2, 2), padding='same', name='encoder')(x)
-    x = Conv2D(filters=16, kernel_size=(3, 3), padding='same',
+    x = Conv2D(filters=8, kernel_size=(3, 3), padding='same',
                activation='relu')(encoded)
     x = UpSampling2D(size=(2, 2))(x)
-    x = Conv2D(filters=32, kernel_size=(3, 3), padding='same',
+    x = Conv2D(filters=8, kernel_size=(3, 3), activation='relu',
+               padding='same')(x)
+    x = UpSampling2D(size=(2, 2))(x)
+    x = Conv2D(filters=16, kernel_size=(3, 3), padding='valid',
                activation='relu')(x)
     x = UpSampling2D(size=(2, 2))(x)
-    decoded = Conv2D(filters=1, kernel_size=(3, 3), activation='sigmoid',
+    decoded = Conv2D(filters=3, kernel_size=(3, 3), activation='sigmoid',
                      padding='same')(x)
 
     # Define the compiler
     autoencoder = Model(img_input, decoded)
     parallel_autoencoder = multi_gpu_model(model=autoencoder, gpus=n_gpu)
-    parallel_autoencoder.compile(optimizer='adadelta',
-                                 loss='binary_crossentropy')
+    parallel_autoencoder.compile(optimizer=Adam(lr=0.01),
+                                 loss='mean_squared_error')
     return parallel_autoencoder
 
 
-def train_model(wd, height, width, n_gpu, n_epoch):
+def train_model(wd, height, width, n_gpu, n_epoch, train_data, val_data):
     """Trains our autoencoder
 
     Args:
@@ -58,41 +114,33 @@ def train_model(wd, height, width, n_gpu, n_epoch):
         width (int): Image width
         n_gpu (int): Number of GPUs used to train model
         n_epoch (int): Number of epochs to train model
+        train_data (ndarray, shape=[None, height, width, 3]): Training data
+        val_data (ndarray, shape=[None, height, width, 3]): Validation data
 
     Returns:
         object: Keras model object
     """
 
-    # Define the image generator so we can scale our images on the fly
-    train_datagen = ImageDataGenerator(
-        featurewise_center=True, featurewise_std_normalization=True,
-        validation_split=0.25
-    )
-
-    # Define the training generator object
-    train_generator = train_datagen.flow_from_directory(
-        directory=os.path.join(wd, 'fruits-360/train'),
-        target_size=(height, width),
-        seed=17
-    )
-
     # Get our Keras model
     model = define_model(height=height, width=width, n_gpu=n_gpu)
 
     # Define callbacks for our model
-    checkpoint = ModelCheckpoint(filepath=os.path.join(wd, 'autoencoder',
-                                                       'autoencoder.h5'),
-                                 save_best_only=True)
+    checkpoint = ModelCheckpoint(
+        filepath=os.path.join(wd, 'autoencoder', 'autoencoder_weights.h5'),
+        save_best_only=True, save_weights_only=True
+    )
+
     logger = CSVLogger(filename=os.path.join(wd, 'autoencoder', 'error.csv'))
 
+    early_stop = EarlyStopping(patience=2)
+
     # Train the model
-    model.fit_generator(
-        generator=train_generator,
-        epochs=n_epoch,
-        callbacks=[checkpoint, logger],
-        use_multiprocessing=True,
-        workers=multiprocessing.cpu_count()
+    model.fit(
+        x=train_data, y=train_data, epochs=n_epoch, verbose=2,
+        callbacks=[checkpoint, logger, early_stop],
+        validation_data=(val_data, val_data)
     )
+    return model
 
 
 def get_encoded_data(wd, height, width, n_gpu, n_epoch):
@@ -109,38 +157,44 @@ def get_encoded_data(wd, height, width, n_gpu, n_epoch):
         (ndarray, shape=?): Array of encoded data
     """
 
+    # Get our image data and standardize it
+    img_data = read_imgs(wd=wd, is_train=True)
+    train_mean = img_data.mean()
+    train_std = img_data.std()
+    img_data = (img_data - train_mean) / train_std
+
+    # Also grab the test data
+    test_data = read_imgs(wd=wd, is_train=False)
+    test_data = (test_data - train_mean) / train_std
+
+    # Split our data so we can use validation
+    np.random.seed(17)
+    split_idx = np.random.choice(
+        [True, False], size=img_data.shape[0], replace=True, p=[0.75, 0.25]
+    )
+    train_data = img_data[split_idx, :, :, :]
+    val_data = img_data[np.logical_not(split_idx), :, :, :]
+
     # Check if the autoencoder already exists, if so, load the model;
     # we will train our autoencoder
-    if os.path.exists(os.path.join(wd, 'autoencoder/autoencoder.h5')):
-        model = load_model(filepath=os.path.join(wd, 'autoencoder',
-                                                 'autoencoder.h5'))
+    if os.path.exists(os.path.join(wd, 'autoencoder/autoencoder_weights.h5')):
+        model = define_model(height=height, width=width, n_gpu=n_gpu)
+        model.load_weights(os.path.join(wd, 'autoencoder',
+                                        'autoencoder_weights.h5'))
     else:
         model = train_model(wd=wd, height=height, width=width, n_gpu=n_gpu,
-                            n_epoch=n_epoch)
+                            n_epoch=n_epoch, train_data=train_data,
+                            val_data=val_data)
 
     # Using the model we need to define a new Keras model which will allow
     # us to extract the transformed data
     encoder = Model(inputs=model.input,
-                    outputs=model.get_layer('encoder').output)
-
-    # Define the image generator so we can scale our images on the fly
-    predict_datagen = ImageDataGenerator(
-        featurewise_center=True, featurewise_std_normalization=True
-    )
-
-    # Define the training generator object
-    predict_generator = predict_datagen.flow_from_directory(
-        directory=os.path.join(wd, 'fruits-360/train'),
-        target_size=(height, width),
-        seed=17
-    )
+                    outputs=model.layers[3].get_layer('encoder').output)
 
     # Get our encoded data
-    encoded_data = encoder.predict_generator(
-        generator=predict_generator, use_multiprocessing=True,
-        workers=multiprocessing.cpu_count(), verbose=1
-    )
-    return encoded_data
+    train_encoded = encoder.predict(x=img_data)
+    test_encoded = encoder.predict(x=test_data)
+    return train_encoded, test_encoded
 
 
 if __name__ == '__main__':
@@ -149,8 +203,9 @@ if __name__ == '__main__':
     parser.add_argument('wd', help='Working directory for script', type=str)
     parser.add_argument('height', help='Image height', type=int)
     parser.add_argument('width', help='Image width', type=int)
-    parser.add_argument('n_epoch', help='Number of epochs', type=int)
     parser.add_argument('n_gpu', help='Number of GPUs', type=int)
+    parser.add_argument('--n_epoch', help='Number of epochs', type=int,
+                        required=False)
     args = vars(parser.parse_args())
 
     # Create a directory to hold our autoencoder object if it doesn't
@@ -159,11 +214,42 @@ if __name__ == '__main__':
         os.mkdir(os.path.join(args['wd'], 'autoencoder'))
 
     # Get our encoded data
-    data = get_encoded_data(
+    x_train, x_test = get_encoded_data(
         wd=args['wd'], height=args['height'], width=args['width'],
         n_gpu=args['n_gpu'], n_epoch=args['n_epoch']
     )
+    x_train = x_train.reshape(x_train.shape[0], -1)
+    x_test = x_test.reshape(x_test.shape[0], -1)
+
+    # Add our data to a pandas DataFrame
+    train_df = pd.DataFrame(x_train)
+    test_df = pd.DataFrame(x_test)
+
+    # Get the original labels for our data
+    label_directories = os.listdir(os.path.join(args['wd'],
+                                                'fruits-360/train'))
+    train_labels = [[]] * len(label_directories)
+    test_labels = [[]] * len(label_directories)
+    for (i, directory) in enumerate(label_directories):
+        train_labels[i] = [i] * len(os.listdir(
+            os.path.join(args['wd'], 'fruits-360/train', directory)
+        ))
+
+        test_labels[i] = [i] * len(os.listdir(
+            os.path.join(args['wd'], 'fruits-360/test', directory)
+        ))
+
+    # Flatten our list of labels and add to the data
+    train_labels = flatten_list(train_labels)
+    test_labels = flatten_list(test_labels)
+    train_df.loc[:, 'label'] = train_labels
+    test_df.loc[:, 'label'] = test_labels
 
     # Save the data to disk
-    np.save(file=os.path.join(args['wd'], 'autoencoder', 'encoded_data'),
-            arr=data)
+    train_df.to_csv(os.path.join(args['wd'], 'fruits_matrix',
+                                 'train_encoded.csv'),
+              index=False)
+
+    test_df.to_csv(os.path.join(args['wd'], 'fruits_matrix',
+                                'test_encoded.csv'),
+                   index=False)

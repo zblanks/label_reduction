@@ -1,6 +1,6 @@
 import sys
 sys.path.insert(0, '/home/zblanks/label_reduction')
-import gen_feasible_solns
+from old_scripts import gen_feasible_solns
 import glob
 import os
 from multiprocessing import Pool
