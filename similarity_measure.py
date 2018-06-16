@@ -1,14 +1,11 @@
 from sklearn.metrics.pairwise import pairwise_kernels
 from scipy.special import comb
-import pandas as pd
 import numpy as np
 from itertools import combinations
-from multiprocessing import Pool
 
 
 class SimilarityMeasure(object):
-    """Class to compute the similarity metric and compute the relevant
-    correction factor
+    """Class to compute the similarity metric for classes and combinations
 
     Parameters
     ----------
@@ -22,23 +19,18 @@ class SimilarityMeasure(object):
     combo_approx_num: int
         Number of combinations to use for the correction factor
 
-    compute_correction: bool
-        Whether we will compute the correction factor
-
     Attributes
     ----------
     sim_mat_: array, shape=(n_sample, n_sample)
     class_sim_: array, shape=(n_class, 1)
     combo_sim_: array, shape=(n_combo, 1)
-    correction_factor_: dict
 
     """
 
-    def __init__(self, df, metric, combo_approx_num, compute_correction=False):
+    def __init__(self, df, metric, combo_approx_num=None):
         self.df = df
         self.metric = metric
         self.combo_approx_num = combo_approx_num
-        self.compute_correction = compute_correction
 
         # Determine the number of classes in the data
         self.n_class = len(np.unique(self.df.label))
@@ -51,10 +43,6 @@ class SimilarityMeasure(object):
         self.sim_mat_ = np.empty(shape=(self.df.shape[0], self.df.shape[0]))
         self.class_sim_ = np.empty(shape=(self.n_class, 1))
         self.combo_sim_ = np.empty(shape=(self.n_combo, 1))
-
-        # Get every possible combination value to instantiate our
-        # correction factor dictionary
-        self.correction_factor_ = {}
 
     def get_idx(self):
         """Gets our combination and class indexes
@@ -234,78 +222,6 @@ class SimilarityMeasure(object):
         """
         return [item for sublist in x for item in sublist]
 
-    def compute_correction_factor(self):
-        """Computes the correction factor
-
-        Returns
-        -------
-        object: self
-
-        """
-        # Define list of lists which will allow us to hold data to
-        # eventually compute the correction for all relevant group sizes
-        true_sim = [[]] * len(range(3, self.n_class))
-        approx_sim = [[]] * len(range(3, self.n_class))
-        group_size = [[]] * len(range(3, self.n_class))
-
-        # Now we need to go through every possible group size we could see
-        # and compute the correction factor
-        count = 0
-        for i in range(3, self.n_class):
-            combo_iterator = combinations(range(self.n_class), i)
-            group_combos = [()] * self.combo_approx_num
-            for j in range(self.combo_approx_num):
-                group_combos[j] = next(combo_iterator)
-            group_size[count] = [count] * self.combo_approx_num
-
-            # Compute the pairwise approximation for the provided group
-            # combinations
-            with Pool() as p:
-                pairwise_approx = p.map(self.compute_pairwise_approx,
-                                        group_combos)
-            approx_sim[count] = pairwise_approx
-
-            # Get all of the labels for the provided combinations to use to
-            # compute the true similarity value
-            with Pool() as p:
-                group_labels = p.map(self.get_label_idx, group_combos)
-
-            # Using those labels now we can compute the true similarity value
-            # (note: we would do this in parallel, but we would like
-            # exhaust our memory and thus will have to do it sequentially)
-            actual_sim = [0.] * self.combo_approx_num
-            for (j, label_idx) in enumerate(group_labels):
-                actual_sim[j] = self.compute_true_group_similarity(label_idx)
-            true_sim[count] = actual_sim
-            count += 1
-
-        # Flatten our data and add it to the DataFrame we will use to compute
-        # the correction factor
-        true_sim = self.flatten_list(true_sim)
-        approx_sim = self.flatten_list(approx_sim)
-        group_size = self.flatten_list(group_size)
-        correct_df = pd.DataFrame({'true_sim': true_sim,
-                                   'approx_sim': approx_sim,
-                                   'group_size': group_size})
-
-        # Using our DataFrame we now need to compute the mean absolute
-        # deviance of the true versus the approximated similarity value
-        # for each group size ranging from {3, ..., C-L}; we note that
-        # there is no error for labels which have no combinations or only
-        # one combination
-        correct_df['sim_diff'] = np.abs(correct_df.true_sim -
-                                        correct_df.approx_sim)
-        correct_df.drop(['approx_sim', 'true_sim'], axis=1, inplace=True)
-        correct_df = correct_df.groupby('group_size').mean()
-        correct_df.index = range(3, self.n_class)
-        self.correction_factor_ = correct_df.to_dict()['sim_diff']
-
-        # By construction there is no correction if we have a group of size
-        # one or two in a label and thus we set these to zero
-        self.correction_factor_[1] = 0.
-        self.correction_factor_[2] = 0.
-        return self
-
     def run(self):
         """Runs the SimilarityMeasure class and computes the
         class and pairwise similarity and also computes the correction factor
@@ -316,6 +232,4 @@ class SimilarityMeasure(object):
 
         """
         self.get_similarity_measures()
-        if self.compute_correction:
-            self.compute_correction_factor()
         return self
