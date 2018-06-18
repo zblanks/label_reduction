@@ -47,30 +47,30 @@ class LocalSearch(object):
 
     def __init__(self, n_label, combo_sim, class_sim, random_seed=17,
                  n_init=10, mixing_factor=1/2, search_method='inexact'):
-        self.__n_label = n_label
-        self.__combo_sim = combo_sim
-        self.__class_sim = class_sim
-        self.__random_seed = random_seed
-        self.__n_init = n_init
-        self.__mixing_factor = mixing_factor
-        self.__search_method = search_method
+        self.n_label = n_label
+        self.combo_sim = combo_sim
+        self.class_sim = class_sim
+        self.random_seed = random_seed
+        self.n_init = n_init
+        self.mixing_factor = mixing_factor
+        self.search_method = search_method
 
         # Infer the number of classes and labels from the provided initial
         # solution
-        self.__n_class = self.__class_sim.shape[0]
+        self.n_class = self.class_sim.shape[0]
 
         # Set the seed for the remainder of the procedure
-        np.random.seed(self.__random_seed)
+        np.random.seed(self.random_seed)
 
         # Infer the total number of pairwise combinations for our setup
-        self.__n_combo = int(comb(self.__n_class, 2))
+        self.n_combo = int(comb(self.n_class, 2))
 
         # Initialize the attributes of interest
-        self.label_map = np.empty(shape=(self.__n_class, self.__n_label))
+        self.label_map = np.empty(shape=(self.n_class, self.n_label))
         self.obj_val = 0.
         self.n_iter = 0
 
-    def __check_balance(self, z):
+    def check_balance(self, z):
         """Computes the balance value a proposed solution z
 
         Parameters
@@ -84,7 +84,7 @@ class LocalSearch(object):
 
         """
         # Compute the balance value of the proposed solution
-        label_combos = list(combinations(range(self.__n_label), 2))
+        label_combos = list(combinations(range(self.n_label), 2))
         tau = np.zeros(shape=(len(label_combos),), dtype=int)
         for (i, combo) in enumerate(label_combos):
             tau[i] = np.abs(z[:, combo[0]].sum(axis=0) -
@@ -92,16 +92,16 @@ class LocalSearch(object):
         balance = tau.sum().astype(int)
 
         # Compute the worst case scenario balance
-        m = self.__n_class - self.__n_label + 1
-        w = (m - 1) * (self.__n_label - 1)
+        m = self.n_class - self.n_label + 1
+        w = (m - 1) * (self.n_label - 1)
 
         # Check if the solution works
-        if balance < (self.__mixing_factor * w):
+        if balance < (self.mixing_factor * w):
             return True
         else:
             return False
 
-    def __gen_feasible_soln(self):
+    def gen_feasible_soln(self):
         """Generates a feasible solution from the initial LP solution
 
         Returns
@@ -111,36 +111,36 @@ class LocalSearch(object):
 
         """
         # Define our initial matrix
-        start_soln = np.zeros(shape=(self.__n_class, self.__n_label))
+        start_soln = np.zeros(shape=(self.n_class, self.n_label))
 
         # Get a list of all the classes we need to assign to a label
-        classes = np.arange(self.__n_class)
+        classes = np.arange(self.n_class)
 
         # Next we need to randomly select n_label of those classes and
         # place in this the initial solution to meet our requirement that
         # we have a class in each label
-        init_class_assign = np.random.choice(classes, size=self.__n_label,
+        init_class_assign = np.random.choice(classes, size=self.n_label,
                                              replace=False)
-        start_soln[init_class_assign, np.arange(self.__n_label)] = 1
+        start_soln[init_class_assign, np.arange(self.n_label)] = 1
 
         # Now we need to remove the classes we've already assigned and then
         # generate a random assignment for the remaining classes
         classes = classes[~np.in1d(classes, init_class_assign)]
         while True:
             # Make a random assignment for the remaining classes
-            random_assign = np.random.choice(np.arange(self.__n_label),
+            random_assign = np.random.choice(np.arange(self.n_label),
                                              size=len(classes))
             proposed_soln = np.copy(start_soln)
             proposed_soln[classes, random_assign] = 1
 
             # Check if the proposed solution meets the balance requirements
-            if self.__check_balance(proposed_soln):
+            if self.check_balance(proposed_soln):
                 start_soln = np.copy(proposed_soln)
                 break
         return start_soln
 
-    def __gen_feasible_soln_garbage_fn(self, _):
-        """Garbage function which allows us to call __gen_feasible_soln with map
+    def gen_feasible_soln_garbage_fn(self, _):
+        """Garbage function which allows us to call gen_feasible_soln with map
 
         Parameters
         ----------
@@ -150,9 +150,9 @@ class LocalSearch(object):
         -------
 
         """
-        return self.__gen_feasible_soln()
+        return self.gen_feasible_soln()
 
-    def __check_feasible_soln(self, z):
+    def check_feasible_soln(self, z):
         """Checks whether the provided label map is a feasible solution
 
         Parameters
@@ -172,12 +172,12 @@ class LocalSearch(object):
             return False
 
         # Next we have to check if we meet the balance constraints
-        if self.__check_balance(z):
+        if self.check_balance(z):
             return True
         else:
             return False
 
-    def __infer_lone_class(self, z):
+    def infer_lone_class(self, z):
         """Infers the lone class
 
         Parameters
@@ -191,9 +191,9 @@ class LocalSearch(object):
         """
         lone_cols = (z.sum(axis=0) == 1).astype(int).reshape(-1, 1)
         lone_cols = np.matmul(z, lone_cols).flatten().astype(int).tolist()
-        return dict(zip(range(self.__n_class), lone_cols))
+        return dict(zip(range(self.n_class), lone_cols))
 
-    def __infer_dvs(self, z):
+    def infer_dvs(self, z):
         """Infers the relevant decision variables from the provided label
         map
 
@@ -210,11 +210,11 @@ class LocalSearch(object):
 
         # To determine when a class is by itself we need to identify any
         # columns which have only one entry
-        class_dict = self.__infer_lone_class(z)
+        class_dict = self.infer_lone_class(z)
 
         # Determine the combinations present our label map
-        combos = list(combinations(range(self.__n_class), 2))
-        w = np.zeros(shape=(self.__n_combo,), dtype=int)
+        combos = list(combinations(range(self.n_class), 2))
+        w = np.zeros(shape=(self.n_combo,), dtype=int)
         combo_cols = np.where(z.sum(axis=0) > 1)[0]
 
         for (i, combo) in enumerate(combos):
@@ -225,7 +225,7 @@ class LocalSearch(object):
         combo_dict = dict(zip(combos, w))
         return class_dict, combo_dict
 
-    def __compute_objective(self, class_dict, combo_dict):
+    def compute_objective(self, class_dict, combo_dict):
         """Computes the objective value for the provided label map
 
         Parameters
@@ -245,15 +245,15 @@ class LocalSearch(object):
         """
         # Compute the lone class similarity
         lone_class = np.fromiter(class_dict.values(), dtype=float)
-        lone_class_sim = (self.__class_sim * lone_class).sum()
+        lone_class_sim = (self.class_sim * lone_class).sum()
 
         # Compute the value of the pairwise similarity
         combo_vars = np.fromiter(combo_dict.values(), dtype=float)
-        pairwise_sim = (self.__combo_sim * combo_vars).sum()
+        pairwise_sim = (self.combo_sim * combo_vars).sum()
         return pairwise_sim + lone_class_sim
 
     @staticmethod
-    def __find_combo_cols_idxbo_cols_idx(z):
+    def find_combo_cols_idx(z):
         """Finds the indexes which correspond to combination columns
 
         Parameters
@@ -276,7 +276,7 @@ class LocalSearch(object):
         j = combo_cols[j]
         return i, j
 
-    def __gen_neighbor(self, z, i_idx, j_idx):
+    def gen_neighbor(self, z, i_idx, j_idx):
         """Generator which yields a complete neighbor of z
 
         Parameters
@@ -298,7 +298,7 @@ class LocalSearch(object):
         """
         for (i, val) in enumerate(i_idx):
             orig_j_idx = j_idx[i]
-            for j in range(self.__n_label):
+            for j in range(self.n_label):
                 if j == orig_j_idx:
                     continue
                 else:
@@ -308,7 +308,7 @@ class LocalSearch(object):
                     yield {'z_neighbor': z_neighbor, 'change_col': j,
                            'old_col': orig_j_idx}
 
-    def __update_dvs(self, z, z_best, combo_dict, change_col, old_col):
+    def update_dvs(self, z, z_best, combo_dict, change_col, old_col):
         """Updates the DV dictionaries in a smart way so we don't have
         to completely re-infer the DVs after using a new neighbor
 
@@ -327,7 +327,7 @@ class LocalSearch(object):
             The column that the change_class was moved to
 
         old_col: int
-            The orignal column that the class resided in
+            The original column that the class resided in
 
         Returns
         -------
@@ -355,10 +355,10 @@ class LocalSearch(object):
 
         # Finally we need to update the new lone class dictionary by
         # checking where the column sum equals 1
-        class_dict = self.__infer_lone_class(z)
+        class_dict = self.infer_lone_class(z)
         return class_dict, new_combo_dict
 
-    def __inexact_search(self, z):
+    def inexact_search(self, z):
         """Performs inexact local search
 
         Parameters
@@ -374,8 +374,8 @@ class LocalSearch(object):
         """
         # Compute the objective value for the starting solution
         z_best = np.copy(z)
-        class_dict, combo_dict = self.__infer_dvs(z_best)
-        obj_val = self.__compute_objective(class_dict, combo_dict)
+        class_dict, combo_dict = self.infer_dvs(z_best)
+        obj_val = self.compute_objective(class_dict, combo_dict)
         n_iter = 0
         change_z = True
 
@@ -390,13 +390,13 @@ class LocalSearch(object):
 
             # Infer the columns that have combination indexes so we can
             # use this to generate neighbors
-            i_idx, j_idx = self.__find_combo_cols_idxbo_cols_idx(z_best)
+            i_idx, j_idx = self.find_combo_cols_idx(z_best)
 
             # Define our complete neighborhood generator
-            z_neighborhood = self.__gen_neighbor(z_best, i_idx, j_idx)
+            z_neighborhood = self.gen_neighbor(z_best, i_idx, j_idx)
             for neighbor in z_neighborhood:
                 # Check if the solution is feasible
-                if not self.__check_feasible_soln(neighbor['z_neighbor']):
+                if not self.check_feasible_soln(neighbor['z_neighbor']):
                     continue
 
                 # Grab the neighbor and (i, j) change index
@@ -406,13 +406,13 @@ class LocalSearch(object):
 
                 # Infer the DV changes and compute the new objective
                 # value
-                new_class_dict, new_combo_dict = self.__update_dvs(
+                new_class_dict, new_combo_dict = self.update_dvs(
                     z=z_neighbor, z_best=z_best, combo_dict=combo_dict,
                     change_col=change_col, old_col=old_col
                 )
 
-                new_obj_val = self.__compute_objective(new_class_dict,
-                                                       new_combo_dict)
+                new_obj_val = self.compute_objective(new_class_dict,
+                                                     new_combo_dict)
                 if new_obj_val > obj_val:
                     z_best = np.copy(z_neighbor)
                     obj_val = new_obj_val
@@ -422,7 +422,7 @@ class LocalSearch(object):
                     break
         return {'z_best': z_best, 'obj_val': obj_val, 'n_iter': n_iter}
 
-    def __exact_search(self, z):
+    def exact_search(self, z):
         """Performs exact local search where we consider the entire
         neighborhood to find the best local max
 
@@ -438,8 +438,8 @@ class LocalSearch(object):
         """
         # Compute the objective value for the starting solution
         z_best = np.copy(z)
-        class_dict, combo_dict = self.__infer_dvs(z_best)
-        obj_val = self.__compute_objective(class_dict, combo_dict)
+        class_dict, combo_dict = self.infer_dvs(z_best)
+        obj_val = self.compute_objective(class_dict, combo_dict)
         n_iter = 0
 
         # With exact local search we will consider the entire complete
@@ -447,16 +447,16 @@ class LocalSearch(object):
         # instead of just the first one that improves the solution
         while True:
             # Get potential indexes which we can use to make swaps
-            i_idx, j_idx = self.__find_combo_cols_idxbo_cols_idx(z_best)
+            i_idx, j_idx = self.find_combo_cols_idx(z_best)
 
             # Generate the entire z_neighborhood
-            z_neighborhood = list(self.__gen_neighbor(z_best, i_idx,
-                                                      j_idx))
+            z_neighborhood = list(self.gen_neighbor(z_best, i_idx,
+                                                    j_idx))
 
             # Remove any infeasible solutions
             feasible_solns = [False] * len(z_neighborhood)
             for (i, neighbor) in enumerate(z_neighborhood):
-                feasible_solns[i] = self.__check_feasible_soln(
+                feasible_solns[i] = self.check_feasible_soln(
                     z=neighbor['z_neighbor']
                 )
             z_neighborhood = list(compress(z_neighborhood, feasible_solns))
@@ -471,14 +471,14 @@ class LocalSearch(object):
                 old_col = neighbor['old_col']
 
                 # Update the DVs based on the neighboring solution
-                new_class_dict, new_combo_dict = self.__update_dvs(
+                new_class_dict, new_combo_dict = self.update_dvs(
                     z=z_neighbor, z_best=z_best, combo_dict=combo_dict,
                     change_col=change_col, old_col=old_col
                 )
 
                 # Compute the new objective value
-                obj_vals[i] = self.__compute_objective(new_class_dict,
-                                                       new_combo_dict)
+                obj_vals[i] = self.compute_objective(new_class_dict,
+                                                     new_combo_dict)
                 class_dicts[i] = new_class_dict
                 combo_dicts[i] = new_combo_dict
 
@@ -495,7 +495,7 @@ class LocalSearch(object):
                 break
         return {'z_best': z_best, 'obj_val': obj_val, 'n_iter': n_iter}
 
-    def __single_search(self, z):
+    def single_search(self, z):
         """Performs local search to find the best label map given the
         provided starting point z
 
@@ -510,10 +510,10 @@ class LocalSearch(object):
             number of iterations needed to converge to a local optima
 
         """
-        if self.__search_method == 'inexact':
-            soln_dict = self.__inexact_search(z)
+        if self.search_method == 'inexact':
+            soln_dict = self.inexact_search(z)
         else:
-            soln_dict = self.__exact_search(z)
+            soln_dict = self.exact_search(z)
         return soln_dict
 
     def search(self):
@@ -530,13 +530,13 @@ class LocalSearch(object):
         # to generate n_init starting solutions
         # Generate n_init starting solutions
         with Pool() as p:
-            starting_solns = p.map(self.__gen_feasible_soln_garbage_fn,
-                                   range(self.__n_init))
+            starting_solns = p.map(self.gen_feasible_soln_garbage_fn,
+                                   range(self.n_init))
 
         # Using our starting solutions get the best solution for each
         # of them
         with Pool() as p:
-            best_local_solns = p.map(self.__single_search, starting_solns)
+            best_local_solns = p.map(self.single_search, starting_solns)
 
         # Grab the objective values from each of the solutions, determine
         # which one is the best, and then return the solution and value
@@ -554,8 +554,8 @@ class LocalSearch(object):
             self.n_iter = best_local_solns[best_soln]['n_iter']
         except ValueError:
             print('Could not find feasible solution on iteration {}'.
-                  format(self.__n_label))
-            self.label_map = np.zeros(shape=(self.__n_class, self.__n_label))
+                  format(self.n_label))
+            self.label_map = np.zeros(shape=(self.n_class, self.n_label))
             self.obj_val = 0.
             self.n_iter = 0
         return self

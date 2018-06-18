@@ -32,7 +32,7 @@ function label_reduce(C::Int, L::Int, t::Array, r::Array, f::Float64,
     @assert size(r) == (C, L)
 
     # Define the model
-    m = Model(solver=GurobiSolver(LogFile=path))
+    m = Model(solver=GurobiSolver(LogFile=path, TimeLimit=10*60))
 
     # Define the variables
     @variable(m, z[i=1:C, j=1:L], Bin)
