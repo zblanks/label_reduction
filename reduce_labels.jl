@@ -16,7 +16,9 @@ function label_reduce(C::Int, L::Int, t::Array, r::Array, f::Float64,
         path = location to save the solver log file
 
     Returns:
-        (Array): z_{i,j} for all i, j
+        Dict:
+            Dictionary containing the optimal label map and the objective
+            value of the solution
     """
 
     # We need to determine the total number of class combinations
@@ -89,5 +91,6 @@ function label_reduce(C::Int, L::Int, t::Array, r::Array, f::Float64,
 
     # Solve the problem
     solve(m)
-    return getvalue(z)
+    soln_dict = Dict("map" => getvalue(z), "obj_val" => getobjectivevalue(m))
+    return soln_dict
 end
