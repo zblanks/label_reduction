@@ -28,16 +28,17 @@ function label_reduce(C::Int, L::Int, t::Array, r::Array, f::Float64,
     W = (M - 1) * (L - 1)
 
     # Check that the provided arrays have the correct dimension
-    @assert size(t) == (n_class_combo, 1)
+    @assert size(t) == (n_class_combo, L)
     @assert size(r) == (C, L)
 
     # Define the model
-    m = Model(solver=GurobiSolver(LogFile=path, TimeLimit=10*60))
+    m = Model(solver=GurobiSolver(LogFile=path, TimeLimit=10*60,
+    LogToConsole=0))
 
     # Define the variables
     @variable(m, z[i=1:C, j=1:L], Bin)
     @variable(m, x[j=1:L], Bin)
-    @variable(m, w[s=1:n_class_combo], Bin)
+    @variable(m, w[s=1:n_class_combo, j=1:L], Bin)
     @variable(m, 0 <= y[i=1:C, j=1:L] <= 1)
     @variable(m, 0 <= τ[k=1:n_label_combo] <= M - 1)
 
@@ -78,12 +79,11 @@ function label_reduce(C::Int, L::Int, t::Array, r::Array, f::Float64,
     for (i, elt) in enumerate(class_combos)
         s_set[i] = (elt[1], elt[2], i)
     end
-    for elt in s_set
-        @constraint(m, sum((z[elt[1], j] + z[elt[2], j]) -
-        (y[elt[1], j] + y[elt[2], j]) for j=1:L) >= 2 - 2*(1-w[elt[3]]))
-
-        @constraint(m, sum((z[elt[1], j] + z[elt[2], j]) -
-        (y[elt[1], j] + y[elt[2], j]) for j=1:L) <= 1 + 2*w[elt[3]])
+    for j = 1:L
+        for elt in s_set
+            @constraint(m, z[elt[1], j] + z[elt[2], j] >= 2 - 2(1-w[elt[3], j]))
+            @constraint(m, z[elt[1], j] + z[elt[2], j] <= 1 + 2*w[elt[3], j])
+        end
     end
 
     # Define the objective function

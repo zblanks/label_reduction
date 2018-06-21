@@ -20,7 +20,7 @@ function reshape_data(r, t, C::Int, L::Int)
     r = reshape(convert(Array, r[:Column1]), C, 1)
     r = repeat(r, inner=(1, L))
     t = convert(Array, t[:Column1])
-    t = reshape(t, (size(t)[1], 1))
+    t = repeat(t, inner=(1, L))
 
     # Return the data
     return r, t
@@ -40,8 +40,8 @@ function compute_balance(z)
     label_combos = collect(combinations(1:L, 2))
     tau_vals = Array{Float64}(length(label_combos,))
     for i in 1:length(label_combos)
-        tau_vals[i] = sum(abs.(z[:, label_combos[i][1]] -
-        z[:, label_combos[i][2]]))
+        tau_vals[i] = sum(abs.(sum(z[:, label_combos[i][1]]) -
+        sum(z[:, label_combos[i][2]])))
     end
     tau_sum = sum(tau_vals)
     return tau_sum / W
@@ -54,10 +54,11 @@ end
 r, t = get_data(ARGS)
 C = size(r)[1]
 mixing_factors = [1/8, 1/4, 1/2]
-n_sample = length(2:(C-1)) * length(mixing_factors)
-res = Array{Float64}(n_sample, 6)
+label_vals = 5:25
+n_sample = length(label_vals) * length(mixing_factors)
+res = Array{Float64}(n_sample, 5)
 count = 1
-for L = 2:(C-1)
+for L in label_vals
     for factor in mixing_factors
         # Get our re-shaped version of r and t
         tmp_r, tmp_t = reshape_data(r, t, C, L)
@@ -81,20 +82,17 @@ for L = 2:(C-1)
         res[count, 2] = soln_dict["obj_val"]
         res[count, 3] = factor
         res[count, 4] = compute_balance(soln_dict["map"])
-        res[count, 5] = nprocs()
-        res[count, 6] = soln_time
+        res[count, 5] = soln_time
         count = count + 1
 
         # Display our progress
-        if L % 5 == 0
-            println("Completed $L problems")
-        end
+        println("Completed $L labels with $factor mixing factor")
     end
 end
 
 # Convert the experiment matrix into a DataFrame so that we can save it to disk
 df = DataFrame(n_label=res[:, 1], obj_val=res[:, 2], mixing_factor=res[:, 3],
-balance_ratio=res[:, 4], n_cpu=res[:, 5], compute_time=res[:, 6])
+balance_ratio=res[:, 4], compute_time=res[:, 5])
 
 CSV.write(joinpath(ARGS[2], "sensitivity_analysis", "sensitivity_res.csv"),
 df)
