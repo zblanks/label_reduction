@@ -1,7 +1,7 @@
 from keras.layers import Conv2D, MaxPooling2D, UpSampling2D, Input, Dense
 from keras.models import Model, load_model
 from keras.utils import multi_gpu_model
-from keras.optimizers import Adam
+from keras.optimizers import Nadam
 import numpy as np
 import os
 import glob
@@ -9,6 +9,7 @@ from imageio import imread
 from multiprocessing import Pool
 from tqdm import tqdm
 import pandas as pd
+from PIL import Image
 
 
 class EncodeData(object):
@@ -25,9 +26,6 @@ class EncodeData(object):
     n_gpu: int
         Number of GPUs used to train the auto-encoder
 
-    n_epoch: int
-        Number of epochs to train the auto-encoder
-
     patience: int
         Number of steps to wait until we stop training
 
@@ -43,35 +41,35 @@ class EncodeData(object):
     lr: float
         Learning rate for the auto-encoder
 
+    max_iter: int
+        Max number of iterations we will allow the model to be trained before
+        cutting it off
+
     Attributes
     ----------
-    encoded_data: array
+    encoded_data: DataFrame
         Encoded data from the auto-encoder
 
     model: Model
         Keras model object containing all of the training history
 
-    train_history: array
-        Array containing the training history of the auto-encoder
-
     """
 
-    def __init__(self, data_path, save_path, n_gpu=2, n_epoch=50,
-                 patience=2, min_delta=0.001, batch_size=64, random_seed=17,
-                 lr=0.01):
+    def __init__(self, data_path, save_path, n_gpu=2, patience=10,
+                 min_delta=0.001, batch_size=256, random_seed=17, lr=0.001,
+                 max_iter=500):
         self.data_path = data_path
         self.save_path = save_path
         self.n_gpu = n_gpu
-        self.n_epoch = n_epoch
         self.patience = patience
         self.min_delta = min_delta
         self.batch_size = batch_size
         self.random_seed = random_seed
         self.lr = lr
+        self.max_iter = max_iter
 
         # Instantiate our encoded data objected
         self.encoded_data = np.empty(shape=(1, 1), dtype=float)
-        self.train_history = np.empty(shape=(0, 2), dtype=float)
 
         # Define an placeholder Keras objects
         a = Input(shape=(1,))
@@ -83,6 +81,7 @@ class EncodeData(object):
         self.height = 0
         self.width = 0
         self.n_channel = 3
+        self.need_reshape = True
 
         # Define the number of steps we will need per epoch for our
         # training and validation data
@@ -94,6 +93,12 @@ class EncodeData(object):
         self.img_files = np.array([])
         self.train_files = np.array([])
         self.val_files = np.array([])
+
+        # Set a placeholder for the best validation loss value and reaching
+        # the early stopping condition
+        self.best_loss = np.inf
+        self.stop_condition = False
+        self.n_iter = 0
 
         # Define our random seed for the object
         np.random.seed(self.random_seed)
@@ -205,6 +210,8 @@ class EncodeData(object):
             self.height = self.nearest_power2(min(img.shape[0], img.shape[1]))
             self.width = self.nearest_power2(min(img.shape[0], img.shape[1]))
             self.n_channel = img.shape[2]
+        else:
+            self.need_reshape = False
         return self
 
     def compute_train_val_step(self):
@@ -236,43 +243,32 @@ class EncodeData(object):
         else:
             self.all_step = int(np.floor(len(self.img_files) /
                                          self.batch_size)) + 1
+
+        # Ensure that all of the steps are integers
+        self.train_step = int(self.train_step)
+        self.val_step = int(self.val_step)
+        self.all_step = int(self.all_step)
         return self
 
     @staticmethod
-    def crop_image(img, new_shape):
-        """Crops the provided image
+    def create_thumbnail(img, new_shape):
+        """Creates a thumbnail
 
         Parameters
         ----------
-        img: array
+        img: Image.Image
 
         new_shape: tuple
-            Desired new shape for the image
+            Desired new image shape
 
         Returns
         -------
-        array
-            Cropped image
+        Image.Image
+            PIL Image object
 
         """
-        # We assume that the new shape is different from the original shape
-        # of the image, that the old shape is strictly greater than then
-        # new shape and that both the new and old shape are square
-        if img.shape == new_shape:
-            return img
-
-        # Crop the image
-        offset = (img.shape[0] - new_shape[0]) // 2
-        if img.shape[0] % 2 == 0:
-            new_img = img[offset:(img.shape[0] - offset),
-                          offset:(img.shape[1] - offset)]
-            assert new_img.shape == new_shape, 'Cropped image does not match'
-            return new_img
-        else:
-            new_img = img[offset:(img.shape[0] - offset - 1),
-                          offset:(img.shape[1] - offset - 1)]
-            assert new_img.shape == new_shape, 'Cropped image does not match'
-            return new_img
+        img.thumbnail(new_shape)
+        return img
 
     def get_images(self, files):
         """Reads in all of the images from the provided files
@@ -289,15 +285,17 @@ class EncodeData(object):
         """
         # Get in the images
         with Pool() as p:
-            imgs = p.map(imread, files)
+            imgs = p.map(Image.open, files)
 
+        # Resize the images if we need to
+        if self.need_reshape:
+            with Pool() as p:
+                imgs = p.starmap(self.create_thumbnail,
+                                 zip(imgs, [(self.height, self.width,
+                                             self.n_channel)] * len(imgs)))
+        # Get our images as an array and rescale to be in [0, 1]
         with Pool() as p:
-            imgs = p.starmap(
-                self.crop_image,
-                zip(imgs,
-                    [(self.height, self.width,
-                      self.n_channel)] * len(imgs))
-            )
+            imgs = p.map(np.array, imgs)
         imgs = np.array(imgs)
         imgs = imgs / 255
         return imgs
@@ -329,13 +327,13 @@ class EncodeData(object):
         elif data_source == 'validation':
             for i in range(self.val_step):
                 files = self.val_files[(self.batch_size * i):
-                                       (self.batch_size * i+1)]
+                                       (self.batch_size * (i+1))]
                 yield self.get_images(files)
 
         else:
             for i in range(self.all_step):
                 files = self.img_files[(self.batch_size * i):
-                                       (self.batch_size * i+1)]
+                                       (self.batch_size * (i+1))]
                 yield self.get_images(files)
 
     def define_model(self):
@@ -386,9 +384,11 @@ class EncodeData(object):
 
         # Define the compiler
         self.model = Model(img_input, decoder)
+        self.model.compile(optimizer=Nadam(lr=self.lr),
+                           loss='binary_crossentropy')
         self.parallel_model = multi_gpu_model(model=self.model,
                                               gpus=self.n_gpu)
-        self.parallel_model.compile(optimizer=Adam(lr=self.lr),
+        self.parallel_model.compile(optimizer=Nadam(lr=self.lr),
                                     loss='binary_crossentropy')
         return self
 
@@ -426,6 +426,7 @@ class EncodeData(object):
             val_loss[i] = self.parallel_model.test_on_batch(x_val, x_val)
 
         # Get the average training and validation loss for the epoch
+        self.n_iter += 1
         loss_dict = {'train_loss': train_loss.mean(),
                      'val_loss': val_loss.mean()}
         return loss_dict
@@ -438,34 +439,41 @@ class EncodeData(object):
         object: self
 
         """
-        # If we don't improve for patience steps then we will the training
+        # If we don't improve for patience epochs then we will the training
         # process
-        best_loss = np.inf
         steps_since_improve = 0
 
         # Train the model for at most n_epoch iterations
-        for i in range(self.n_epoch):
+        for i in range(self.max_iter):
             # Check if we've hit the EarlyStopping condition
-            if steps_since_improve == self.patience:
+            if steps_since_improve >= self.patience:
+                self.stop_condition = True
                 break
 
             # Run our model for the particular epoch
             loss = self.run_epoch()
-            loss_vect = np.array([loss['train_loss'], loss['val_loss']])
-            loss_vect = loss_vect.reshape(-1, 2)
-            self.train_history = np.append(self.train_history, loss_vect,
-                                           axis=0)
+            loss_df = pd.DataFrame(loss, index=[0])
+
+            # If the training history exists, write to the end of the existing
+            # file; otherwise, we need to create a new file
+            file = os.path.join(self.save_path, 'loss.csv')
+            if os.path.exists(file):
+                with open(file, 'a') as f:
+                    loss_df.to_csv(f, header=False, index=False)
+            else:
+                loss_df.to_csv(file, index=False)
+
             # Print the results from this epoch
-            print('Train loss: {0:.4f}\n'
+            print('Iteration: ' + str(i) + '; Train loss: {0:.4f}; '
                   'Val loss: {0:.4f}'.format(loss['train_loss'],
                                              loss['val_loss']))
 
             # Check if we did any better this epoch within the tolerance
-            if np.abs(loss['val_loss'] - best_loss) <= self.min_delta:
+            if np.abs(loss['val_loss'] - self.best_loss) <= self.min_delta:
                 steps_since_improve += 1
             else:
                 # Update the loss value
-                best_loss = loss['val_loss']
+                self.best_loss = loss['val_loss']
                 steps_since_improve = 0
 
                 # Save the model
@@ -490,13 +498,13 @@ class EncodeData(object):
         # Go through all of the data and generate the encoding
         data_gen = self.img_generator(data_source='all')
         data_list = [0.] * self.all_step
-        for i in range(self.all_step):
+        for i in tqdm(range(self.all_step)):
             # Get the data
             img_data = next(data_gen)
             data_list[i] = encoder.predict_on_batch(img_data)
 
         # Collect all of the data
-        self.encoded_data = np.array(data_list)
+        self.encoded_data = np.concatenate(data_list, axis=0)
         return self
 
     def get_labels(self):
@@ -535,17 +543,38 @@ class EncodeData(object):
         self.compute_train_val_step()
 
         # Now that we have the necessary files, if the auto-encoder has
-        # already been saved then we can read it into disk; otherwise,
-        # we are going to have to train the model
+        # already been saved then we can read it into disk and then we need
+        # to check that the model was trained to completion; if not then
+        # we will fully train it; otherwise, we need to start from scratch
         if os.path.exists(os.path.join(self.save_path, 'auto_encoder.h5')):
             self.model = load_model(os.path.join(self.save_path,
                                                  'auto_encoder.h5'))
+            # Check to see if we reached the stopping condition from the last
+            # training iteration
+            file = os.path.join(self.save_path, 'loss.csv')
+            history_df = pd.read_csv(file)
+            self.best_loss = history_df['val_loss'].min(axis=0)
+            best_loss_idx = history_df['val_loss'].argmin(axis=0)
+            if (best_loss_idx + 1) != history_df.shape[0]:
+                # If this is true; we've hit the stopping condition and
+                # and thus don't need to keep training the model
+                self.stop_condition = True
         else:
             self.define_model()
-            self.fit_model()
+
+        # Keep training our model until we either hit the early stopping
+        # condition or we hit the max number of iterations
+        while not self.stop_condition:
+            if self.n_iter >= self.max_iter:
+                print('Max iterations reached')
+                self.stop_condition = True
+            else:
+                self.fit_model()
 
         # Now that we have a model to work with, we need to get the encoded
         # data and the labels
+        file = os.path.join(self.save_path, 'auto_encoder.h5')
+        self.model = load_model(file)
         self.get_encoded_data()
         labels = self.get_labels()
 
