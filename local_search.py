@@ -31,9 +31,13 @@ class LocalSearch(object):
     search_method: str
         Whether we are going to do exact or inexact local search
 
+    max_try: int
+        Max number of times we will allow the algorithm to try to find
+        a feasible solution before stopping it
+
     Attributes
     ----------
-    label_map : array, shape=(n_class, n_label)
+    label_map : array
         Best label map found through local search
 
     obj_val : float
@@ -43,10 +47,17 @@ class LocalSearch(object):
         Number of iterations for the local search to converge to local
         optima
 
+    combo_dict: dict
+        Dictionary mapping the class combinations
+
+    class_dict: dict
+        Dictionary mapping the lone classes
+
     """
 
     def __init__(self, n_label, combo_sim, class_sim, random_seed=17,
-                 n_init=10, mixing_factor=1/2, search_method='inexact'):
+                 n_init=10, mixing_factor=1/4, search_method='inexact',
+                 max_try=1000):
         self.n_label = n_label
         self.combo_sim = combo_sim
         self.class_sim = class_sim
@@ -54,6 +65,7 @@ class LocalSearch(object):
         self.n_init = n_init
         self.mixing_factor = mixing_factor
         self.search_method = search_method
+        self.max_try = max_try
 
         # Infer the number of classes and labels from the provided initial
         # solution
@@ -70,12 +82,16 @@ class LocalSearch(object):
         self.obj_val = 0.
         self.n_iter = 0
 
+        # Initialze the class and combination dictionaries
+        self.class_dict = {}
+        self.combo_dict = {}
+
     def check_balance(self, z):
         """Computes the balance value a proposed solution z
 
         Parameters
         ----------
-        z: array, shape=(n_class, n_label)
+        z: array
 
         Returns
         -------
@@ -101,12 +117,55 @@ class LocalSearch(object):
         else:
             return False
 
+    def fix_infeasible_soln(self, z):
+        """Fixes an infeasible proposed solution and attempts to make it
+        feasible or will stop after max_try attempts
+
+        Parameters
+        ----------
+        z: array
+
+        Returns
+        -------
+        array:
+            Feasible solution
+
+        """
+
+        attempts = 0
+        soln = np.copy(z)
+        while True:
+            # Check to see if we've hit the attempt limit
+            if attempts >= self.max_try:
+                soln = np.zeros(shape=soln.shape)
+                break
+            else:
+                # Find the largest column and grab a random entry from this
+                # column
+                max_col = np.argmax(soln.sum(axis=0))
+                random_entry = np.random.choice(
+                    np.nonzero(soln[:, max_col])[0], size=1
+                )
+
+                # Find the smallest column and assign this entry to that
+                # column
+                min_col = np.argmin(soln.sum(axis=0))
+                soln[random_entry, max_col] = 0
+                soln[random_entry, min_col] = 1
+
+                # Check if our solution is feasible
+                if self.check_feasible_soln(soln):
+                    break
+                else:
+                    attempts += 1
+        return soln
+
     def gen_feasible_soln(self):
         """Generates a feasible solution from the initial LP solution
 
         Returns
         -------
-        array, shape=(n_class, n_label): start_soln
+        array: start_soln
             The initial feasible solution used for the local search method
 
         """
@@ -137,6 +196,9 @@ class LocalSearch(object):
             if self.check_balance(proposed_soln):
                 start_soln = np.copy(proposed_soln)
                 break
+            else:
+                start_soln = self.fix_infeasible_soln(proposed_soln)
+                break
         return start_soln
 
     def gen_feasible_soln_garbage_fn(self, _):
@@ -157,7 +219,7 @@ class LocalSearch(object):
 
         Parameters
         ----------
-        z: array, shape=(n_class, n_label)
+        z: array
 
         Returns
         -------
@@ -182,7 +244,7 @@ class LocalSearch(object):
 
         Parameters
         ----------
-        z : array, shape=(n_class, n_label)
+        z : array
 
         Returns
         -------
@@ -199,7 +261,7 @@ class LocalSearch(object):
 
         Parameters
         ----------
-        z : array, shape=(n_class, n_label)
+        z : array
 
         Returns
         -------
@@ -258,14 +320,14 @@ class LocalSearch(object):
 
         Parameters
         ----------
-        z: array, shape=(n_class, n_label)
+        z: array
 
         Returns
         -------
-        array, shape=(n_entry,)
+        array
             i indexes which correspond to the combination columns
 
-        array, shape=(n_entry,)
+        array
             j indexes which correspond to the combination columns
 
         """
@@ -281,7 +343,7 @@ class LocalSearch(object):
 
         Parameters
         ----------
-        z: array, shape=(n_class, n_label)
+        z: array
 
         i_idx: array
             i indexes which correspond to the combination columns
@@ -314,9 +376,9 @@ class LocalSearch(object):
 
         Parameters
         ----------
-        z : array, shape=(n_class, n_label)
+        z : array
 
-        z_best: array, shape=(n_class, n_label)
+        z_best: array
             Current best solution
 
         combo_dict: dict
@@ -363,13 +425,14 @@ class LocalSearch(object):
 
         Parameters
         ----------
-        z : array, shape=(n_class, n_label)
+        z : array
 
         Returns
         -------
         dict
-            Dictionary containing the best label map, objective value, and the
-            number of iterations needed to converge to a local optima
+            Dictionary containing the best label map, objective value, number
+            of iterations to reach the local optima, the lone class map,
+            and the combination class map
 
         """
         # Compute the objective value for the starting solution
@@ -417,10 +480,12 @@ class LocalSearch(object):
                     z_best = np.copy(z_neighbor)
                     obj_val = new_obj_val
                     combo_dict = new_combo_dict.copy()
+                    class_dict = new_class_dict.copy()
                     n_iter += 1
                     change_z = True
                     break
-        return {'z_best': z_best, 'obj_val': obj_val, 'n_iter': n_iter}
+        return {'z_best': z_best, 'obj_val': obj_val, 'n_iter': n_iter,
+                'combo_dict': combo_dict, 'class_dict': class_dict}
 
     def exact_search(self, z):
         """Performs exact local search where we consider the entire
@@ -428,13 +493,14 @@ class LocalSearch(object):
 
         Parameters
         ----------
-        z : array, shape=(n_class, n_label)
+        z : array
 
         Returns
         -------
         dict
-            Dictionary containing the best label map, objective value, and the
-            number of iterations needed to converge to a local optima
+            Dictionary containing the best label map, objective value, number
+            of iterations to reach the local optima, the lone class map,
+            and the combination class map
         """
         # Compute the objective value for the starting solution
         z_best = np.copy(z)
@@ -489,11 +555,13 @@ class LocalSearch(object):
                 best_soln_idx = int(np.argmax(obj_vals))
                 z_best = z_neighborhood[best_soln_idx]['z_neighbor']
                 combo_dict = combo_dicts[best_soln_idx].copy()
+                class_dict = class_dict[best_soln_idx].copy()
                 n_iter += 1
             else:
                 # Break we've found the local max
                 break
-        return {'z_best': z_best, 'obj_val': obj_val, 'n_iter': n_iter}
+        return {'z_best': z_best, 'obj_val': obj_val, 'n_iter': n_iter,
+                'combo_dict': combo_dict, 'class_dict': class_dict}
 
     def single_search(self, z):
         """Performs local search to find the best label map given the
@@ -501,7 +569,7 @@ class LocalSearch(object):
 
         Parameters
         ----------
-        z : array, shape=(n_class, n_label)
+        z : array
 
         Returns
         -------
@@ -526,9 +594,8 @@ class LocalSearch(object):
 
         """
 
-        # Assuming the provided solution was not already optimal, we need
-        # to generate n_init starting solutions
-        # Generate n_init starting solutions
+        # Generate n_init starting solutions or if that is not possible
+        # give a junk answer that is not feasible
         with Pool() as p:
             starting_solns = p.map(self.gen_feasible_soln_garbage_fn,
                                    range(self.n_init))
@@ -546,16 +613,16 @@ class LocalSearch(object):
             obj_vals[i] = best_local_solns[i]['obj_val']
 
         # Try to get the best solution, but if we don't have a single
-        # feasible solution pass junk data and inform the user
+        # feasible solution pass junk data
         try:
             best_soln = np.argmax(obj_vals)
             self.label_map = best_local_solns[best_soln]['z_best'].astype(int)
             self.obj_val = np.max(obj_vals)
             self.n_iter = best_local_solns[best_soln]['n_iter']
+            self.class_dict = best_local_solns[best_soln]['class_dict']
+            self.combo_dict = best_local_solns[best_soln]['combo_dict']
         except ValueError:
-            print('Could not find feasible solution on iteration {}'.
-                  format(self.n_label))
             self.label_map = np.zeros(shape=(self.n_class, self.n_label))
             self.obj_val = 0.
-            self.n_iter = 0
+            self.n_iter = -1
         return self
