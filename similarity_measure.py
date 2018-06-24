@@ -1,7 +1,8 @@
-from sklearn.metrics.pairwise import pairwise_kernels
-from scipy.special import comb
+from sklearn.metrics.pairwise import pairwise_kernels, pairwise_distances
 import numpy as np
-from itertools import combinations
+import pandas as pd
+from itertools import combinations, product, repeat
+from multiprocessing import Pool
 
 
 class SimilarityMeasure(object):
@@ -9,7 +10,7 @@ class SimilarityMeasure(object):
 
     Parameters
     ----------
-    df: DataFrame
+    df: pd.DataFrame
         Data (with labels) used to compute the similarity for pairs or
         combinations; it is expected that the labels have a column titled
         "label"
@@ -17,145 +18,204 @@ class SimilarityMeasure(object):
     metric: str
         Similarity metric
 
+    use_dist: bool
+        Whether to use a distance or a kernel similarity metric
+
+    sample_approx: float
+        Percentage of the data to use for the approximation of the similarity
+        values
+
     Attributes
     ----------
-    sim_mat: array, shape=(n_sample, n_sample)
-    class_sim: array, shape=(n_class, 1)
-    combo_sim: array, shape=(n_combo, 1)
+    class_sim: np.ndarray
+    combo_sim: np.ndarray
 
     """
 
-    def __init__(self, df, metric):
-        self.df = df
-        self.metric = metric
-
-        # Determine the number of classes in the data
-        self.n_class = len(np.unique(self.df.label))
-        self.n_combo = int(comb(self.n_class, 2))
-
-        # Get our pairwise combinations
-        self.combos = list(combinations(range(self.n_class), 2))
+    def __init__(self, df, metric='euclidean', use_dist=True,
+                 sample_approx=0.10):
+        self._df = df
+        self._metric = metric
+        self._use_dist = use_dist
+        self._sample_approx = sample_approx
 
         # Initialize the relevant attributes
-        self.sim_mat = np.empty(shape=(self.df.shape[0], self.df.shape[0]))
-        self.class_sim = np.empty(shape=(self.n_class, 1))
-        self.combo_sim = np.empty(shape=(self.n_combo, 1))
+        self.class_sim = np.array([])
+        self.combo_sim = np.array([])
 
-    def get_idx(self):
-        """Gets our combination and class indexes
+        # Check to make sure self._df is a DataFrame
+        self._df = pd.DataFrame(self._df)
+
+    def _get_class_idx(self, label):
+        """Gets the class indexes
+
+        Parameters
+        ----------
+        label: int
 
         Returns
         -------
-        list: class_idx
-        list: combo_idx
+        np.ndarray
+            Array containing the (i, j) index for each intra-class index
+            combination used to compute the similarity metric
+
+        """
+        indexes = self._df.index[self._df.label == label].tolist()
+        idx_combos = list(combinations(indexes, 2))
+        return np.array(idx_combos)
+
+    def _get_combo_idx(self, combo):
+        """Gets the indexes for a particular pairwise combo
+
+        Parameters
+        ----------
+        combo: tuple
+
+        Returns
+        -------
+        np.ndarray
+
+        """
+        idx1 = self._df.index[self._df.label == combo[0]].tolist()
+        idx2 = self._df.index[self._df.label == combo[1]].tolist()
+        idx_prod = list(product(idx1, idx2))
+        return np.array(idx_prod)
+
+    def _get_idx(self):
+        """Gets the (i, j) indexes for the classes and combos
+
+        Returns
+        -------
+        dict
+            Dictionary containing the (i, j) index arrays for every class
+            and combo
 
         """
 
-        # First get the indexes for each of our classes
-        class_idx = [None] * self.n_class
-        for i in range(self.n_class):
-            class_idx[i] = self.df.index[self.df.label == i].tolist()
+        # Get the indexes for the lone classes
+        classes = np.unique(self._df.label)
+        with Pool() as p:
+            class_idx = p.map(self._get_class_idx, classes)
 
-        # Now get the combination indexes
-        combo_idx = [None] * self.n_combo
-        for (i, combo) in enumerate(self.combos):
-            combo_idx[i] = class_idx[combo[0]] + class_idx[combo[1]]
-        return class_idx, combo_idx
+        # Get the combination indexes
+        combos = combinations(classes, 2)
+        with Pool() as p:
+            combo_idx = p.map(self._get_combo_idx, combos)
+        return {'class_idx': class_idx, 'combo_idx': combo_idx}
 
-    def compute_sim_matrix(self):
+    def _sample_data(self, label):
+        """Samples the data for the given label
+
+        Parameters
+        ----------
+        label: int
+
+        Returns
+        -------
+        pd.DataFrame
+            Down-sampled DataFrame
+
+        """
+        df = self._df[self._df.label == label]
+        random_entries = np.random.choice([True, False], size=len(df.index),
+                                          replace=True,
+                                          p=[self._sample_approx,
+                                             1 - self._sample_approx])
+        df = df.loc[random_entries, :]
+        return df
+
+    def _get_data_approx(self):
+        """Gets the approximation of the so that we don't have to compute
+        the similarity matrix for all n entries
+
+        Returns
+        -------
+        pd.DataFrame
+
+        """
+
+        # Get the down-sampled DataFrames for each label
+        classes = np.unique(self._df.label)
+        with Pool() as p:
+            df_list = p.map(self._sample_data, classes)
+
+        # Combine the list of DataFrames and reset the index
+        data = pd.concat(df_list)
+        return pd.DataFrame(data).reset_index(drop=True)
+
+    def _compute_sim_matrix(self):
         """Computes the similarity matrix for the provided data
 
         Returns
         -------
-        object: self
+        np.ndarray
+            Similarity matrix
 
         """
 
         # Transform our data into an array
-        data = self.df.drop(['label'], axis=1)
-        data = data.as_matrix()
+        data = self._df.drop(['label'], axis=1)
 
         # Compute the similarity metric
-        self.sim_mat = pairwise_kernels(X=data, metric=self.metric,
-                                        n_jobs=-1)
-        return self
+        if self._use_dist:
+            sim_mat = pairwise_distances(X=data, metric=self._metric,
+                                         n_jobs=-1)
+        else:
+            sim_mat = pairwise_kernels(X=data, metric=self._metric,
+                                       n_jobs=-1)
+        return sim_mat
 
-    def compute_similarity(self, idx_list):
+    @staticmethod
+    def _compute_similarity(sim_mat, idx):
         """Computes the similarity for either the single or pairwise
         approximation
 
         Parameters
         ----------
-        idx_list: list of lists containing the indexes for class/combos
+        sim_mat: np.ndarray
+            Similarity matrix
+
+        idx: np.ndarray
+            (i, j) index array for the particular class or combination
 
         Returns
         -------
-        array, shape=(n_class or n_combo, )
-            Similarity vector by class or combination
+        float
+            Average similarity value
 
         """
-
-        # Compute the similarity by grabbing only the relevant indexes
-        # and then taking their average
-        sim = np.empty(shape=(len(idx_list)))
-        for (i, idx) in enumerate(idx_list):
-            tmp_mat = self.sim_mat[np.ix_(idx, idx)]
-            tmp_idx1, tmp_idx2 = np.tril_indices_from(arr=tmp_mat, k=-1)
-            sim[i] = tmp_mat[tmp_idx1, tmp_idx2].mean()
-        return sim
-
-    def get_similarity_measures(self):
-        """Computes the lone and pairwise approximation similarity measures
-        and returns their arrays
-
-        Returns
-        -------
-        object: self
-
-        """
-
-        # Re-map our labels to be 0, ..., C
-        labels = np.unique(self.df.label)
-        label_map = dict(zip(labels, range(len(labels))))
-        self.df.label = np.vectorize(label_map.get)(self.df.label)
-
-        # Get the class and combination indexes
-        class_idx, combo_idx = self.get_idx()
-
-        # Compute the similarity matrix
-        self.compute_sim_matrix()
-
-        # Compute the similarity vectors
-        self.class_sim = self.compute_similarity(idx_list=class_idx)
-        self.combo_sim = self.compute_similarity(idx_list=combo_idx)
-        return self
-
-    def find_pair_idx(self, pair):
-        """Finds the index of the particular (i, j) combo so that we can
-        extract it from our pairwise similarity vector
-
-        Parameters
-        ----------
-        pair: tuple
-            (i, j) combination
-
-        Returns
-        -------
-        int: index where (i, j) is located
-
-        """
-        combo_arr = np.array(self.combos)
-        return np.where((combo_arr[:, 0] == pair[0]) &
-                        (combo_arr[:, 1] == pair[1]))[0].tolist()
+        return sim_mat[idx[:, 0], idx[:, 1]].mean()
 
     def run(self):
         """Runs the SimilarityMeasure class and computes the
-        class and pairwise similarity and also computes the correction factor
+        class and pairwise similarity
 
         Returns
         -------
         object: self
 
         """
-        self.get_similarity_measures()
+
+        # Down-sample the data to speed up computation time
+        self._df = self._get_data_approx()
+
+        # First get the necessary indexes for the classes and combinations
+        idx_dict = self._get_idx()
+
+        # Compute the similarity matrix
+        sim_mat = self._compute_sim_matrix()
+
+        # Compute the lone class similarity values
+        sim_mat = repeat(sim_mat)
+        with Pool() as p:
+            class_sim = p.starmap(self._compute_similarity,
+                                  zip(sim_mat, idx_dict['class_idx']))
+
+        # Compute the combination similarity values
+        with Pool() as p:
+            combo_sim = p.starmap(self._compute_similarity,
+                                  zip(sim_mat, idx_dict['combo_idx']))
+
+        self.class_sim = np.array(class_sim)
+        self.combo_sim = np.array(combo_sim)
         return self

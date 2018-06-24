@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from imageio import imread
-from itertools import combinations, repeat
+from itertools import combinations, repeat, product
 import os
 from glob import glob
 from multiprocessing import Pool
@@ -17,6 +17,12 @@ class ImageDistance(object):
         File path to the image data set (assumed that it contains a list of
         directories which belong to a class of images; ex: apple)
 
+    n_sample: int
+        Number of samples to take to approximate the similarity
+
+    norm: int
+        Whether to use the L1 or L2 norm
+
     Attributes
     ----------
     combo_sim: array
@@ -27,8 +33,10 @@ class ImageDistance(object):
 
     """
 
-    def __init__(self, file_path):
+    def __init__(self, file_path, n_sample=100, norm=2):
         self._file_path = file_path
+        self._n_sample = n_sample
+        self._norm = norm
 
         # Define a placeholder for the pairwise and lone class similarity
         # measures
@@ -81,24 +89,19 @@ class ImageDistance(object):
         return self
 
     @staticmethod
-    def _compute_img_diff(images, idx_combo):
-        """Computes the pixel-by-pixel difference between two images
+    def _rescale_img(img):
+        """Re-scales an image to be between [0, 1]
 
         Parameters
         ----------
-        images
-            List of images
-
-        idx_combo: tuple
-            Index combination
+        img: array
 
         Returns
         -------
         array
 
         """
-        img1, img2 = idx_combo
-        return images[img1] - images[img2]
+        return img / 255
 
     def _compute_sim(self, label):
         """Computes the L2 similarity metric for either a single or
@@ -106,7 +109,7 @@ class ImageDistance(object):
 
         Parameters
         ----------
-        label: list
+        label
             List of labels either containing a label combination or a lone
             class
 
@@ -123,19 +126,60 @@ class ImageDistance(object):
         image_files = image_files.tolist()
         image_files = np.array(image_files)
 
-        # Read in all of the provided images
-        images = map(imread, image_files)
+        # We have to account for the cases that we're working with a lone
+        # class or that we're working with a combination; we do separate
+        # things for each of these instances
+        if len(label) == 1:
+            random_files = np.random.choice(np.arange(len(image_files)),
+                                            size=self._n_sample)
+            image_files = image_files[random_files]
 
-        # Scale all of the images in the list to be between [0, 1]
-        images = list(map(lambda img: img / 255, images))
+            # Read in the images and scale them between [0, 1]
+            images = map(imread, image_files)
+            images = list(map(self._rescale_img, images))
 
-        # Compute the pixel-by-pixel difference between each image
-        combos = combinations(range(len(images)), 2)
-        images = repeat(images)
-        image_diff = map(self._compute_img_diff, images, combos)
+            # Compute the image difference for each (n choose 2) image
+            # combination
+            combos = combinations(range(self._n_sample), 2)
+            images = repeat(images)
+            image_diff = map(lambda img, idx: img[idx[0]] - img[idx[1]],
+                             images, combos)
+        else:
+            # Grab the files corresponding to the first class
+            first_files = self._file_df.loc[(self._file_df.label == label[0]),
+                                            'file']
+            random_files = np.random.choice(first_files.index.tolist(),
+                                            size=(self._n_sample // 2),
+                                            replace=False)
+            first_files = first_files.loc[random_files]
 
-        # Compute the L2 norm for the image difference
-        diff_norm = list(map(np.linalg.norm, image_diff))
+            # Grab the files corresponding to the second class
+            second_files = self._file_df.loc[(self._file_df.label == label[1]),
+                                             'file']
+            random_files = np.random.choice(second_files.index.tolist(),
+                                            size=(self._n_sample // 2),
+                                            replace=False)
+            second_files = second_files.loc[random_files]
+
+            # Read and scale for both cases
+            first_imgs = map(imread, first_files)
+            first_imgs = map(self._rescale_img, first_imgs)
+            second_imgs = map(imread, second_files)
+            second_imgs = map(self._rescale_img, second_imgs)
+
+            # We need to create every possible pair of first and second
+            # images so that we can compute the pairwise value
+            img_prod = product(first_imgs, second_imgs)
+
+            # Use our list of image tuples corresponding to the first and
+            # second classes, we need to compute their difference
+            image_diff = map(lambda x: x[0] - x[1], img_prod)
+
+        # Compute the image norm
+        if self._norm == 2:
+            diff_norm = list(map(np.linalg.norm, image_diff))
+        else:
+            diff_norm = list(map(lambda x: np.abs(x).sum(), image_diff))
         return np.array(diff_norm).mean()
 
     def run(self):
