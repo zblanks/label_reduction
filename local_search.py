@@ -1,6 +1,7 @@
 import numpy as np
-from itertools import combinations, compress, repeat
+from itertools import combinations, compress, repeat, tee, starmap
 from scipy.special import comb
+import pandas as pd
 from multiprocessing import Pool
 
 
@@ -39,6 +40,10 @@ class LocalSearch(object):
         Whether we are minimizing or maximizing the objective function.
         This would change depending on what metric we are using
 
+    max_iter: int
+        The max number of iterations we will allow the algorithm to go
+        until we we shut it off so that it does not search forever
+
     Attributes
     ----------
     label_map : array
@@ -61,7 +66,7 @@ class LocalSearch(object):
 
     def __init__(self, n_label, combo_sim, class_sim, random_seed=17,
                  n_init=10, mixing_factor=1/4, search_method='inexact',
-                 max_try=1000, is_min=True):
+                 max_try=1000, is_min=True, max_iter=1000):
         self._n_label = n_label
         self._combo_sim = combo_sim
         self._class_sim = class_sim
@@ -71,6 +76,7 @@ class LocalSearch(object):
         self._search_method = search_method
         self._max_try = max_try
         self._is_min = is_min
+        self._max_iter = max_iter
 
         # Infer the number of classes and labels from the provided initial
         # solution
@@ -215,18 +221,13 @@ class LocalSearch(object):
             proposed_soln = np.copy(start_soln)
             proposed_soln[classes, random_assign] = 1
 
-            # Check if the proposed solution meets the balance requirements
-            # and we will only enforce the balance constraints for the
-            # maximization version because when minimizing the objective
-            # the solutions will typically want to be balanced to decrease
-            # the number of combinations
-            if not self._is_min:
-                if self._check_balance(proposed_soln):
-                    start_soln = np.copy(proposed_soln)
-                    break
-                else:
-                    start_soln = self._fix_infeasible_soln(proposed_soln)
-                    break
+            # Check to make sure we have a balanced solution
+            if self._check_balance(proposed_soln):
+                start_soln = np.copy(proposed_soln)
+                break
+            else:
+                start_soln = self._fix_infeasible_soln(proposed_soln)
+                break
         return start_soln
 
     def _gen_feasible_soln_garbage_fn(self, _):
@@ -256,23 +257,15 @@ class LocalSearch(object):
 
         """
 
-        # If we're minimizing the objective we will only enforce the
-        # assignment constraints and not the balance constraint because
-        # the solutions will want to be balanced, but we will enforce them
-        # if we're maximizing the objective
-        if self._is_min:
-            if (z.sum(axis=0) == 0).sum() >= 1:
-                return False
-            else:
-                return True
-        else:
-            if (z.sum(axis=0) == 0).sum() >= 1:
-                return False
+        # First check to ensure that each label has an assignment and then
+        # check the balance constraints
+        if (z.sum(axis=0) == 0).sum() >= 1:
+            return False
 
-            if self._check_balance(z):
-                return True
-            else:
-                return False
+        if self._check_balance(z):
+            return True
+        else:
+            return False
 
     def _infer_lone_class(self, z):
         """Infers the lone class
@@ -348,63 +341,77 @@ class LocalSearch(object):
         pairwise_sim = (self._combo_sim * combo_vars).sum()
         return pairwise_sim + lone_class_sim
 
-    @staticmethod
-    def _find_combo_cols_idx(z):
-        """Finds the indexes which correspond to combination columns
+    def _build_move_df(self, z):
+        """Builds a DataFrame containing all possible ways we can search
+        through the indexes
 
         Parameters
         ----------
-        z: array
+        z: np.ndarray
 
         Returns
         -------
-        array
-            i indexes which correspond to the combination columns
-
-        array
-            j indexes which correspond to the combination columns
+        pd.DataFrame
 
         """
 
-        # Get the indexes
+        # First get the indexes which contain a combination
         combo_cols = np.where(z.sum(axis=0) > 1)[0]
-        i, j = np.nonzero(z[:, combo_cols])
-        j = combo_cols[j]
-        return i, j
+        i_idx, j_idx = np.nonzero(z[:, combo_cols])
+        j_idx = combo_cols[j_idx]
 
-    def _gen_neighbor(self, z, i_idx, j_idx):
+        # Generate all possible new columns we can move to
+        new_cols = list(map(lambda col: np.setdiff1d(np.arange(self._n_label),
+                                                     np.array([col])),
+                            j_idx))
+        new_cols = np.concatenate(new_cols)
+        change_class = np.repeat(i_idx, repeats=(self._n_label - 1))
+        old_cols = np.repeat(j_idx, repeats=(self._n_label - 1))
+        return pd.DataFrame({'change_class': change_class,
+                             'old_col': old_cols, 'new_col': new_cols})
+
+    @staticmethod
+    def _gen_neighbor(z, move_dict):
         """Generator which yields a complete neighbor of z
 
         Parameters
         ----------
         z: array
 
-        i_idx: array
-            i indexes which correspond to the combination columns
-
-        j_idx: array
-            j indexes which correspond to the combination columns
+        move_dict: dict
+            Dictionary containing the indexes for the change class, the old
+            label, and the new label
 
         Returns
         -------
-        dict:
-            Dictionary containing the neighbor solution and (i, j) index
-            which was moved and the original column index
+        np.ndarray
+            z_neighbor
 
         """
-        for (i, val) in enumerate(i_idx):
-            orig_j_idx = j_idx[i]
-            for j in range(self._n_label):
-                if j == orig_j_idx:
-                    continue
-                else:
-                    z_neighbor = np.copy(z)
-                    z_neighbor[val, orig_j_idx] = 0
-                    z_neighbor[val, j] = 1
-                    yield {'z_neighbor': z_neighbor, 'change_col': j,
-                           'old_col': orig_j_idx}
+        # Build the neighbor and return it
+        z_neighbor = np.copy(z)
+        z_neighbor[move_dict['change_class'], move_dict['old_col']] = 0
+        z_neighbor[move_dict['change_class'], move_dict['new_col']] = 1
+        return z_neighbor
 
-    def _update_dvs(self, z, z_best, combo_dict, change_col, old_col):
+    @staticmethod
+    def _remove_bad_combos(combos, label):
+        """Removes combinations that are not relevant for the swap that we
+        made
+
+        Parameters
+        ----------
+        combos: list
+        label: int
+
+        Returns
+        -------
+        List containing only the relevant combinations
+
+        """
+        return [elt for elt in combos if label in elt]
+
+    def _update_dvs(self, z, z_best, combo_dict, move_dict):
         """Updates the DV dictionaries in a smart way so we don't have
         to completely re-infer the DVs after using a new neighbor
 
@@ -419,40 +426,45 @@ class LocalSearch(object):
             Dictionary stating if a particular combination is present in
             a solution
 
-        change_col: int
-            The column that the change_class was moved to
-
-        old_col: int
-            The original column that the class resided in
+        move_dict: dict
+            Dictionary containing information on which class we moved, its
+            old label, and the new new label
 
         Returns
         -------
-        dict: class_dict
-        dict: combo_dict
+        dict
+            Dictionary containing the new class and combination dictionary
 
         """
+
+        # Grab the class, old and new column
+        class_change = move_dict['change_class']
+        old_col = move_dict['old_col']
+        new_col = move_dict['new_col']
 
         # First we need to change any (*, change_class) or (change_class, *)
         # combinations to zero, but everything else can be kept the same
         # since by construction we are only changing one class at a time
         new_combo_dict = combo_dict.copy()
-        old_entries = np.argwhere(z_best[:, old_col] > 0).flatten()
+        old_entries = np.where(z_best[:, old_col] > 0)[0]
         old_combos = list(combinations(old_entries, 2))
+        old_combos = self._remove_bad_combos(old_combos, label=class_change)
         zero_vect = np.zeros(shape=(len(old_combos),), dtype=int)
         new_combo_dict.update(dict(zip(old_combos, zero_vect)))
 
         # Now we need to identify the entries in the column where we moved
         # one of the classes and then correspondingly update the combination
         # dictionary
-        new_entries = np.argwhere(z[:, change_col] > 0).flatten()
+        new_entries = np.where(z[:, new_col] > 0)[0]
         new_combos = list(combinations(new_entries, 2))
+        new_combos = self._remove_bad_combos(new_combos, label=class_change)
         one_vect = np.ones(shape=(len(new_combos),), dtype=int)
         new_combo_dict.update(dict(zip(new_combos, one_vect)))
 
         # Finally we need to update the new lone class dictionary by
         # checking where the column sum equals 1
         class_dict = self._infer_lone_class(z)
-        return class_dict, new_combo_dict
+        return {'class_dict': class_dict, 'combo_dict': new_combo_dict}
 
     def _inexact_search(self, z):
         """Performs inexact local search
@@ -487,29 +499,39 @@ class LocalSearch(object):
             # we will exit out of the while loop
             change_z = False
 
-            # Infer the columns that have combination indexes so we can
-            # use this to generate neighbors
-            i_idx, j_idx = self._find_combo_cols_idx(z_best)
+            # Check if we've hit the upper bound on the number of allowed
+            # iterations
+            if n_iter >= self._max_iter:
+                break
 
-            # Define our complete neighborhood generator
-            z_neighborhood = self._gen_neighbor(z_best, i_idx, j_idx)
-            for neighbor in z_neighborhood:
-                # Check if the solution is feasible
-                if not self._check_feasible_soln(neighbor['z_neighbor']):
+            # Generate every possible move we can make and then permute the
+            # rows of the DataFrame so that we search the space randomly
+            move_df = self._build_move_df(z_best)
+            move_df = move_df.iloc[np.random.permutation(len(move_df))]
+
+            # Iterate over the search space
+            for idx, row in move_df.iterrows():
+                # Grab the relevant parameters to generate the neighbor
+                move_dict = {'change_class': row['change_class'],
+                             'old_col': row['old_col'],
+                             'new_col': row['new_col']}
+
+                # Generate the neighbor
+                z_neighbor = self._gen_neighbor(z=z_best, move_dict=move_dict)
+
+                # Check if the neighbor is feasible
+                if not self._check_feasible_soln(z_neighbor):
                     continue
 
-                # Grab the neighbor and (i, j) change index
-                z_neighbor = neighbor['z_neighbor']
-                change_col = neighbor['change_col']
-                old_col = neighbor['old_col']
-
-                # Infer the DV changes and compute the new objective
-                # value
-                new_class_dict, new_combo_dict = self._update_dvs(
+                # Infer the new DVs
+                dv_dict = self._update_dvs(
                     z=z_neighbor, z_best=z_best, combo_dict=combo_dict,
-                    change_col=change_col, old_col=old_col
+                    move_dict=move_dict
                 )
+                new_class_dict = dv_dict['class_dict']
+                new_combo_dict = dv_dict['combo_dict']
 
+                # Compute the new objective value
                 new_obj_val = self._compute_objective(new_class_dict,
                                                       new_combo_dict)
 
@@ -528,8 +550,27 @@ class LocalSearch(object):
                     n_iter += 1
                     change_z = True
                     break
+
         return {'z_best': z_best, 'obj_val': obj_val, 'n_iter': n_iter,
                 'combo_dict': combo_dict, 'class_dict': class_dict}
+
+    @staticmethod
+    def _drop_rows(elt):
+        """Helper function to help us determine which rows we need to drop
+        from the DataFrame in a lazy manner so we don't use too much memory
+
+        Parameters
+        ----------
+        elt: tuple
+
+        Returns
+        -------
+        int or None
+            Either a row that needs to be dropped or None
+
+        """
+        if elt[1] is False:
+            return elt[0]
 
     def _exact_search(self, z):
         """Performs exact local search where we consider the entire
@@ -548,7 +589,9 @@ class LocalSearch(object):
         """
         # Compute the objective value for the starting solution
         z_best = np.copy(z)
-        class_dict, combo_dict = self._infer_dvs(z_best)
+        dv_dict = self._infer_dvs(z_best)
+        class_dict = dv_dict['class_dict']
+        combo_dict = dv_dict['combo_dict']
         obj_val = self._compute_objective(class_dict, combo_dict)
         n_iter = 0
 
@@ -556,60 +599,76 @@ class LocalSearch(object):
         # neighborhood at each iteration and take the best solution
         # instead of just the first one that improves the solution
         while True:
-            # Get potential indexes which we can use to make swaps
-            i_idx, j_idx = self._find_combo_cols_idx(z_best)
+            # Check if we've hit the upper bound of the number of allowed
+            # iterations
+            if n_iter >= self._max_iter:
+                break
+
+            # Get every possible move index
+            move_df = self._build_move_df(z_best)
+            move_list = map(lambda i: dict(move_df.loc[i, :]),
+                            range(len(move_df)))
+            move_list1, move_list2 = tee(move_list, 2)
+            z_best_repeat = repeat(z_best)
 
             # Generate the entire z_neighborhood
-            z_neighborhood = list(self._gen_neighbor(z_best, i_idx,
-                                                     j_idx))
+            z_neighborhood = map(self._gen_neighbor, z_best_repeat, move_list1)
+            neighborhood1, neighborhood2 = tee(z_neighborhood, 2)
 
             # Remove any infeasible solutions
-            feasible_solns = [False] * len(z_neighborhood)
-            for (i, neighbor) in enumerate(z_neighborhood):
-                feasible_solns[i] = self._check_feasible_soln(
-                    z=neighbor['z_neighbor']
-                )
-            z_neighborhood = list(compress(z_neighborhood, feasible_solns))
+            feasible_solns = map(self._check_feasible_soln, neighborhood1)
+            solns1, solns2, solns3 = tee(feasible_solns, 3)
+            z_neighborhood = compress(neighborhood2, solns1)
+            move_list = compress(move_list2, solns2)
 
-            # Go through every neighbor and compute the objective
-            obj_vals = [0.] * len(z_neighborhood)
-            class_dicts = [{}] * len(z_neighborhood)
-            combo_dicts = [{}] * len(z_neighborhood)
-            for (i, neighbor) in enumerate(z_neighborhood):
-                z_neighbor = neighbor['z_neighbor']
-                change_col = neighbor['change_col']
-                old_col = neighbor['old_col']
+            # Go through every neighbor, infer the DV changes, and compute
+            # the objective value
+            combo_dict_repeat = repeat(combo_dict)
+            fn_args = zip(z_neighborhood, z_best_repeat, combo_dict_repeat,
+                          move_list)
+            dv_dicts = starmap(self._update_dvs, fn_args)
+            dv_dicts1, dv_dicts2 = tee(dv_dicts, 2)
+            class_dicts = map(lambda elt: elt['class_dict'], dv_dicts1)
+            combo_dicts = map(lambda elt: elt['combo_dict'], dv_dicts2)
+            obj_vals = list(map(self._compute_objective, class_dicts,
+                                combo_dicts))
 
-                # Update the DVs based on the neighboring solution
-                new_class_dict, new_combo_dict = self._update_dvs(
-                    z=z_neighbor, z_best=z_best, combo_dict=combo_dict,
-                    change_col=change_col, old_col=old_col
-                )
-
-                # Compute the new objective value
-                obj_vals[i] = self._compute_objective(new_class_dict,
-                                                      new_combo_dict)
-                class_dicts[i] = new_class_dict
-                combo_dicts[i] = new_combo_dict
-
-            # Check if the new value is better depending on whether we're
-            # minimizing or maximizing the objective
+            # If we have any sort of improvement; if we don't then we've
+            # reached a local optimum
             if self._is_min:
                 check = (min(obj_vals) < obj_val)
             else:
                 check = (max(obj_vals) > obj_val)
 
-            # Check if any of the solutions are better than the current best
-            # solution
             if check:
-                obj_val = max(obj_vals)
-                best_soln_idx = int(np.argmax(obj_vals))
-                z_best = z_neighborhood[best_soln_idx]['z_neighbor']
-                combo_dict = combo_dicts[best_soln_idx].copy()
-                class_dict = class_dict[best_soln_idx].copy()
+                if self._is_min:
+                    obj_val = min(obj_vals)
+                    best_soln_idx = int(np.argmin(obj_vals))
+                else:
+                    obj_val = max(obj_vals)
+                    best_soln_idx = int(np.argmax(obj_vals))
+
+                # We need to re-compute the best neighbor and the
+                # DVs because we never fully put the neighborhood or the DV
+                #  dictionaries into memory since the neighborhood can be
+                # quite large
+                feasible_solns = map(self._drop_rows,
+                                     enumerate(solns3))
+                feasible_solns = filter(None.__ne__, feasible_solns)
+                move_df = move_df.drop(feasible_solns)
+                move_df = pd.DataFrame(move_df).reset_index(drop=True)
+                move_dict = dict(move_df.loc[best_soln_idx, :])
+                z_old = z_best
+                z_best = self._gen_neighbor(z_best, move_dict)
+                dv_dict = self._update_dvs(
+                    z=z_best, z_best=z_old, combo_dict=combo_dict,
+                    move_dict=move_dict
+                )
+                combo_dict = dv_dict['combo_dict']
+                class_dict = dv_dict['class_dict']
                 n_iter += 1
             else:
-                # Break we've found the local max
+                # Break we've found the local optimum
                 break
         return {'z_best': z_best, 'obj_val': obj_val, 'n_iter': n_iter,
                 'combo_dict': combo_dict, 'class_dict': class_dict}
