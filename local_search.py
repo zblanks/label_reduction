@@ -3,6 +3,7 @@ from itertools import combinations, compress, repeat, tee, starmap
 from scipy.special import comb
 import pandas as pd
 from multiprocessing import Pool
+from tqdm import tqdm
 
 
 class LocalSearch(object):
@@ -18,9 +19,6 @@ class LocalSearch(object):
 
     class_sim : array, shape=(n_class,)
         Similarity measure for all lone classes
-
-    random_seed : int, default: 17
-        Defines the random seed for the local search
 
     n_init : int, default: 10
         Number of random restarts to use for the local search method
@@ -64,13 +62,12 @@ class LocalSearch(object):
 
     """
 
-    def __init__(self, n_label, combo_sim, class_sim, random_seed=17,
-                 n_init=10, mixing_factor=1/4, search_method='inexact',
+    def __init__(self, n_label, combo_sim, class_sim, n_init=10,
+                 mixing_factor=1/4, search_method='inexact',
                  max_try=1000, is_min=True, max_iter=1000):
         self._n_label = n_label
         self._combo_sim = combo_sim
         self._class_sim = class_sim
-        self._random_seed = random_seed
         self._n_init = n_init
         self._mixing_factor = mixing_factor
         self._search_method = search_method
@@ -81,9 +78,6 @@ class LocalSearch(object):
         # Infer the number of classes and labels from the provided initial
         # solution
         self._n_class = self._class_sim.shape[0]
-
-        # Set the seed for the remainder of the procedure
-        np.random.seed(self._random_seed)
 
         # Infer the total number of pairwise combinations for our setup
         self._n_combo = int(comb(self._n_class, 2))
@@ -146,13 +140,17 @@ class LocalSearch(object):
         else:
             return False
 
-    def _fix_infeasible_soln(self, z):
+    def _fix_infeasible_soln(self, z, rng):
         """Fixes an infeasible proposed solution and attempts to make it
         feasible or will stop after max_try attempts
 
         Parameters
         ----------
         z: array
+
+        rng: np.random.RandomState
+            A RNG so that we can get reproducible results
+
 
         Returns
         -------
@@ -172,7 +170,7 @@ class LocalSearch(object):
                 # Find the largest column and grab a random entry from this
                 # column
                 max_col = np.argmax(soln.sum(axis=0))
-                random_entry = np.random.choice(
+                random_entry = rng.choice(
                     np.nonzero(soln[:, max_col])[0], size=1
                 )
 
@@ -183,19 +181,22 @@ class LocalSearch(object):
                 soln[random_entry, min_col] = 1
 
                 # Check if our solution is feasible
-                if self._check_feasible_soln(soln):
+                if self._check_balance(soln):
                     break
                 else:
                     attempts += 1
         return soln
 
-    def _gen_feasible_soln(self):
+    def _gen_feasible_soln(self, rng):
         """Generates a feasible solution from the initial LP solution
 
         Returns
         -------
         array: start_soln
             The initial feasible solution used for the local search method
+
+        rng: np.random.RandomState
+            A RNG so that we can get reproducible results
 
         """
         # Define our initial matrix
@@ -207,8 +208,8 @@ class LocalSearch(object):
         # Next we need to randomly select n_label of those classes and
         # place in this the initial solution to meet our requirement that
         # we have a class in each label
-        init_class_assign = np.random.choice(classes, size=self._n_label,
-                                             replace=False)
+        init_class_assign = rng.choice(classes, size=self._n_label,
+                                       replace=False)
         start_soln[init_class_assign, np.arange(self._n_label)] = 1
 
         # Now we need to remove the classes we've already assigned and then
@@ -216,56 +217,26 @@ class LocalSearch(object):
         classes = classes[~np.in1d(classes, init_class_assign)]
         while True:
             # Make a random assignment for the remaining classes
-            random_assign = np.random.choice(np.arange(self._n_label),
-                                             size=len(classes))
+            random_assign = rng.choice(np.arange(self._n_label),
+                                       size=len(classes))
             proposed_soln = np.copy(start_soln)
             proposed_soln[classes, random_assign] = 1
 
-            # Check to make sure we have a balanced solution
-            if self._check_balance(proposed_soln):
+            # If we're minimizing we don't have to check balance because
+            # the algorithm will generate balanced solutions, but
+            # we do if we're maximizing
+            if self._is_min:
                 start_soln = np.copy(proposed_soln)
                 break
             else:
-                start_soln = self._fix_infeasible_soln(proposed_soln)
-                break
+                # Check to make sure we have a balanced solution
+                if self._check_balance(proposed_soln):
+                    start_soln = np.copy(proposed_soln)
+                    break
+                else:
+                    start_soln = self._fix_infeasible_soln(proposed_soln, rng)
+                    break
         return start_soln
-
-    def _gen_feasible_soln_garbage_fn(self, _):
-        """Garbage function which allows us to call _gen_feasible_soln with map
-
-        Parameters
-        ----------
-        _
-
-        Returns
-        -------
-
-        """
-        return self._gen_feasible_soln()
-
-    def _check_feasible_soln(self, z):
-        """Checks whether the provided label map is a feasible solution
-
-        Parameters
-        ----------
-        z: array
-
-        Returns
-        -------
-        bool
-            Whether or not the provided solution is feasible
-
-        """
-
-        # First check to ensure that each label has an assignment and then
-        # check the balance constraints
-        if (z.sum(axis=0) == 0).sum() >= 1:
-            return False
-
-        if self._check_balance(z):
-            return True
-        else:
-            return False
 
     def _infer_lone_class(self, z):
         """Infers the lone class
@@ -466,12 +437,15 @@ class LocalSearch(object):
         class_dict = self._infer_lone_class(z)
         return {'class_dict': class_dict, 'combo_dict': new_combo_dict}
 
-    def _inexact_search(self, z):
+    def _inexact_search(self, z, rng):
         """Performs inexact local search
 
         Parameters
         ----------
         z : array
+
+        rng: np.random.RandomState
+            A RNG so that we can get reproducible results
 
         Returns
         -------
@@ -507,7 +481,7 @@ class LocalSearch(object):
             # Generate every possible move we can make and then permute the
             # rows of the DataFrame so that we search the space randomly
             move_df = self._build_move_df(z_best)
-            move_df = move_df.iloc[np.random.permutation(len(move_df))]
+            move_df = move_df.iloc[rng.permutation(len(move_df))]
 
             # Iterate over the search space
             for idx, row in move_df.iterrows():
@@ -519,9 +493,10 @@ class LocalSearch(object):
                 # Generate the neighbor
                 z_neighbor = self._gen_neighbor(z=z_best, move_dict=move_dict)
 
-                # Check if the neighbor is feasible
-                if not self._check_feasible_soln(z_neighbor):
-                    continue
+                # Check the balance if we're maximizing
+                if not self._is_min:
+                    if not self._check_balance(z_neighbor):
+                        continue
 
                 # Infer the new DVs
                 dv_dict = self._update_dvs(
@@ -615,8 +590,11 @@ class LocalSearch(object):
             z_neighborhood = map(self._gen_neighbor, z_best_repeat, move_list1)
             neighborhood1, neighborhood2 = tee(z_neighborhood, 2)
 
-            # Remove any infeasible solutions
-            feasible_solns = map(self._check_feasible_soln, neighborhood1)
+            # Check the balance if we're maximizing
+            if not self._is_min:
+                feasible_solns = map(self._check_balance, neighborhood1)
+            else:
+                feasible_solns = map(lambda elt: True, neighborhood1)
             solns1, solns2, solns3 = tee(feasible_solns, 3)
             z_neighborhood = compress(neighborhood2, solns1)
             move_list = compress(move_list2, solns2)
@@ -673,13 +651,14 @@ class LocalSearch(object):
         return {'z_best': z_best, 'obj_val': obj_val, 'n_iter': n_iter,
                 'combo_dict': combo_dict, 'class_dict': class_dict}
 
-    def _single_search(self, z):
+    def _single_search(self, seed):
         """Performs local search to find the best label map given the
         provided starting point z
 
         Parameters
         ----------
-        z : array
+        seed: int
+            The random seed we will use for the particular instance
 
         Returns
         -------
@@ -688,8 +667,17 @@ class LocalSearch(object):
             number of iterations needed to converge to a local optima
 
         """
+
+        # First define the RNG for this particular instance so we can have
+        # reproducible results
+        rng = np.random.RandomState(seed)
+
+        # Generate a starting feasible solution
+        z = self._gen_feasible_soln(rng=rng)
+
+        # Perform the local search for the starting solution
         if self._search_method == 'inexact':
-            soln_dict = self._inexact_search(z)
+            soln_dict = self._inexact_search(z, rng=rng)
         else:
             soln_dict = self._exact_search(z)
         return soln_dict
@@ -704,16 +692,13 @@ class LocalSearch(object):
 
         """
 
-        # Generate n_init starting solutions or if that is not possible
-        # give a junk answer that is not feasible
+        # Perform local search by going through each of the instances and
+        # providing a random seed for each instance so we get reproducible
+        # results
         with Pool() as p:
-            starting_solns = p.map(self._gen_feasible_soln_garbage_fn,
-                                   range(self._n_init))
-
-        # Using our starting solutions get the best solution for each
-        # of them
-        with Pool() as p:
-            best_local_solns = p.map(self._single_search, starting_solns)
+            best_local_solns = list(tqdm(p.imap(self._single_search,
+                                                range(self._n_init)),
+                                         total=self._n_init))
 
         # Grab the objective values from each of the solutions, determine
         # which one is the best, and then return the solution and value
@@ -723,7 +708,10 @@ class LocalSearch(object):
         # Try to get the best solution, but if we don't have a single
         # feasible solution pass junk data
         try:
-            best_soln = np.argmax(obj_vals)
+            if self._is_min:
+                best_soln = int(np.argmin(obj_vals))
+            else:
+                best_soln = int(np.argmax(obj_vals))
         except ValueError:
             self.label_map = np.zeros(shape=(self._n_class, self._n_label))
             self.obj_val = np.nan
@@ -732,7 +720,10 @@ class LocalSearch(object):
 
         # If we don't get an error, get the relevant metrics
         self.label_map = best_local_solns[best_soln]['z_best'].astype(int)
-        self.obj_val = np.max(obj_vals)
+        if self._is_min:
+            self.obj_val = np.min(obj_vals)
+        else:
+            self.obj_val = np.max(obj_vals)
         self.n_iter = best_local_solns[best_soln]['n_iter']
         self.class_dict = best_local_solns[best_soln]['class_dict']
         self.combo_dict = best_local_solns[best_soln]['combo_dict']
