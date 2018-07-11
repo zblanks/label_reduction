@@ -402,7 +402,7 @@ def _single_search(seed: int, n_label: int, n_class: int, max_try: int,
 
 
 def search(n_label: int, combo_sim: np.ndarray, class_sim: np.ndarray,
-           n_init=10, mixing_factor=1 / 4, max_try=1000, is_min=True,
+           n_init=10, mixing_factor=0.25, max_try=1000, is_min=True,
            max_iter=1000) -> dict:
     """Performs local search n_init times and finds the best search
     given the provided starting point
