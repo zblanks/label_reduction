@@ -373,7 +373,7 @@ def _inexact_search(z: np.ndarray, rng: np.random.RandomState,
                 break
 
     return {"z_best": z_best, "obj_val": obj_val, "n_iter": n_iter,
-            "combo_map": combo_map, "class_dict": class_map}
+            "combo_map": combo_map, "class_map": class_map}
 
 
 def _single_search(seed: int, n_label: int, n_class: int, max_try: int,
