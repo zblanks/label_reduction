@@ -3,10 +3,10 @@ from keras.utils import multi_gpu_model
 from glob import glob
 import os
 import numpy as np
-import pandas as pd
 from multiprocessing import Pool
 from PIL import Image
 from itertools import repeat
+import h5py
 
 
 class TransformData(object):
@@ -17,6 +17,9 @@ class TransformData(object):
     ----------
     data_path: str
         Path where the data is located
+
+    save_path: str
+        Path where to save the .h5 file containing the transformed data
 
     n_gpu: int
         Number of GPUs used to make the image predictions
@@ -36,9 +39,11 @@ class TransformData(object):
 
     """
 
-    def __init__(self, data_path, n_gpu=2, batch_size=256, sample_approx=0.10,
-                 reshape_img=True, img_shape=(256, 256, 3)):
+    def __init__(self, data_path, save_path, n_gpu=2, batch_size=256,
+                 sample_approx=0.10, reshape_img=True,
+                 img_shape=(256, 256, 3)):
         self._data_path = data_path
+        self._save_path = save_path
         self._n_gpu = n_gpu
         self._batch_size = batch_size
         self._sample_approx = sample_approx
@@ -69,7 +74,7 @@ class TransformData(object):
         img_files = [item for sublist in img_files for item in sublist]
         img_files = np.array(img_files)
         labels = [item for sublist in labels for item in sublist]
-        labels = np.array(labels)
+        labels = np.array(labels).reshape(-1, 1)
         return {'img_files': img_files, 'labels': labels}
 
     def _define_model(self):
@@ -184,9 +189,9 @@ class TransformData(object):
 
         # We'll grab a random subset of the data to help us compute the
         # necessary summary statistics
-        idx = np.random.choice(a=[True, False], size=len(img_files),
-                               replace=True, p=[self._sample_approx,
-                                                1 - self._sample_approx])
+        rng = np.random.RandomState(17)
+        idx = rng.choice([True, False], size=len(img_files),
+                         p=[self._sample_approx, 1 - self._sample_approx])
         files = img_files[idx]
         imgs = self._get_imgs(files)
 
@@ -201,9 +206,7 @@ class TransformData(object):
 
         Returns
         -------
-        DataFrame
-            DataFrame containing the transformed data and each sample's
-            corresponding label
+        None
 
         """
 
@@ -237,6 +240,8 @@ class TransformData(object):
 
         # Put the data in the form we expect it to be for the
         # SimilarityMeasure object
-        data = pd.DataFrame(data)
-        data.loc[:, 'label'] = file_dict['labels']
-        return data
+        data = np.concatenate([data, file_dict['labels']], axis=1)
+        f = h5py.File(self._save_path, 'w')
+        f.create_dataset('data', data=data)
+        f.close()
+        return None
