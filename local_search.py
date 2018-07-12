@@ -93,7 +93,7 @@ def _gen_feasible_soln(rng: np.random.RandomState, n_class: int,
     """
 
     # Define our initial matrix
-    start_soln = np.zeros(shape=(n_class, n_label))
+    start_soln = np.zeros(shape=(n_class, n_label), dtype=np.float32)
 
     # Get a list of all the classes we need to assign to a label
     classes = np.arange(n_class)
@@ -130,7 +130,7 @@ def _gen_feasible_soln(rng: np.random.RandomState, n_class: int,
                     mixing_factor=mixing_factor
                 )
                 break
-    return start_soln
+    return start_soln.astype(np.float32)
 
 
 @njit
@@ -138,10 +138,10 @@ def _infer_lone_class(z: np.ndarray) -> np.ndarray:
     """Infers the lone class label map
     """
 
-    lone_cols = np.zeros(shape=(z.shape[1], 1))
+    lone_cols = np.zeros(shape=(z.shape[1], 1), dtype=np.float32)
     lone_loc = np.where(z.sum(axis=0) == 1)[0]
     if len(lone_loc) == 0:
-        return np.zeros(shape=(z.shape[0],), dtype=np.float64)
+        return np.zeros(shape=(z.shape[0],), dtype=np.float32)
     else:
         one_vect = np.ones(shape=len(lone_loc))
         lone_cols[lone_loc] = one_vect
@@ -181,11 +181,11 @@ def _infer_dvs(z: np.ndarray) -> tuple:
     n_combo = ((z.shape[0] * (z.shape[0] - 1)) // 2)
     class_combos = _build_combos(np.arange(n_class))
     combo_cols = np.where(z.sum(axis=0) > 1)[0]
-    w = np.zeros(shape=(n_combo,), dtype=np.int64)
+    w = np.zeros(shape=(n_combo,), dtype=np.float32)
     for (i, combo) in enumerate(class_combos):
         for col in combo_cols:
             if z[combo[0], col] + z[combo[1], col] == 2:
-                w[i] = 1
+                w[i] = 1.
     return class_map, w
 
 
@@ -219,12 +219,31 @@ def _repeat_arr(arr: list, repeats: int) -> np.ndarray:
     return np.array(repeat_arr).reshape(-1, 1)
 
 
-def _compute_objective(combo_sim: np.ndarray, class_sim: np.ndarray,
+def _compute_objective(class_sim: np.ndarray,
+                       combo_sim: np.ndarray,
                        class_map: np.ndarray,
                        combo_map: np.ndarray) -> np.ndarray:
     """Computes the objective value for the provided label maps
     """
     return np.dot(class_sim, class_map) + np.dot(combo_sim, combo_map)
+
+
+def _compute_obj_change(old_combo_sim: np.ndarray,
+                        new_combo_sim: np.ndarray,
+                        old_class_sim: np.ndarray,
+                        new_class_sim: np.ndarray) -> float:
+    """Computes the change in the objective value
+    """
+    if len(old_class_sim) != 0:
+        old_obj = old_combo_sim.sum() + old_class_sim.sum()
+    else:
+        old_obj = old_combo_sim.sum()
+
+    if len(new_class_sim) != 0:
+        new_obj = new_combo_sim.sum() + new_class_sim.sum()
+    else:
+        new_obj = new_combo_sim.sum()
+    return new_obj - old_obj
 
 
 @njit
@@ -249,63 +268,108 @@ def _build_move_arr(z: np.ndarray) -> np.ndarray:
     return np.concatenate((change_class, new_cols, old_cols), axis=1)
 
 
-def _update_dvs(z: np.ndarray, z_best: np.ndarray, combo_map: np.ndarray,
-                move_dict: dict, combo_idx: dict) -> dict:
+@njit
+def _build_change_combos(itr: np.ndarray, label: int) -> list:
+    """Builds the list of combos that changed
+    """
+    change_combos = [(0, 0)] * len(itr)
+    for i in range(len(itr)):
+        if label < itr[i]:
+            change_combos[i] = (label, itr[i])
+        else:
+            change_combos[i] = (itr[i], label)
+    return change_combos
+
+
+def _combo_changes(z: np.ndarray, label: int, col: int) -> list:
+    """Finds the combos that were changed
+    """
+    entries = np.where(z[:, col] > 0)[0]
+    entries = np.delete(entries, np.argwhere(entries == label))
+    return _build_change_combos(entries, label)
+
+
+def _find_assignment_changes(z: np.ndarray, z_best: np.ndarray,
+                             move_dict: dict) -> list:
+    """Finds the assignment changes that were made with the
+    neighbor
+    """
+    # Find the old and new combos
+    old_combos = _combo_changes(z_best, move_dict["change_class"],
+                                move_dict["old_col"])
+    new_combos = _combo_changes(z, move_dict["change_class"],
+                                move_dict["new_col"])
+
+    # Find the old and new lone classes
+    old_lone_class = np.where(z_best.sum(axis=0) == 1)[0].tolist()
+    new_lone_class = np.where(z.sum(axis=0) == 1)[0].tolist()
+    return [old_combos, new_combos, old_lone_class, new_lone_class]
+
+
+def _get_similarity(sim_dict: dict, change_idx: list) -> np.ndarray:
+    """Gets the similarity values for the provided change
+    values and the similarity dictionary
+    """
+    similarity_values = list(map(lambda idx: sim_dict[idx], change_idx))
+    return np.array(similarity_values, dtype=np.float32)
+
+
+def _get_change_similarity(combo_sim: dict, class_sim: dict,
+                           change_list: list) -> dict:
+    """Gets the similarity values given the assignment changes
+    that were made
+    """
+    sim_dicts = [combo_sim, combo_sim, class_sim, class_sim]
+    similarity_values = list(map(_get_similarity, sim_dicts, change_list))
+    keys = ["old_combo_sim", "new_combo_sim", "old_class_sim",
+            "new_class_sim"]
+    similarity_dict = {}
+    for (i, key) in enumerate(keys):
+        similarity_dict[key] = similarity_values[i]
+    return similarity_dict
+
+
+def _update_dvs(z: np.ndarray, old_combos: list, new_combos: list,
+                combo_map: np.ndarray, combo_idx: dict) -> tuple:
     """Updates the DV dictionaries in a smart way so we don't have
     to completely re-infer the DVs after using a new neighbor
     """
 
-    # Grab the class, old and new column
-    class_change = move_dict["change_class"]
-    old_col = move_dict["old_col"]
-    new_col = move_dict["new_col"]
-
     # First we need to change any (*, change_class) or (change_class, *)
     # combinations to zero, but everything else can be kept the same
     # since by construction we are only changing one class at a time
-    new_combo_map = combo_map.copy()
-    old_entries = np.where(z_best[:, old_col] > 0)[0]
-    old_combos = list(combinations(old_entries, 2))
-    old_combos = _remove_bad_combos(old_combos, label=class_change)
     idx = list(map(lambda combo: combo_idx[combo], old_combos))
-    zero_vect = np.zeros(shape=(len(old_combos),), dtype=int)
-    new_combo_map[idx] = zero_vect
+    zero_vect = np.zeros(shape=(len(old_combos),), dtype=np.float32)
+    combo_map[idx] = zero_vect
 
     # Now we need to identify the entries in the column where we moved
     # one of the classes and then correspondingly update the combination
     # dictionary
-    new_entries = np.where(z[:, new_col] > 0)[0]
-    new_combos = list(combinations(new_entries, 2))
-    new_combos = _remove_bad_combos(new_combos, label=class_change)
     idx = list(map(lambda combo: combo_idx[combo], new_combos))
-    one_vect = np.ones(shape=(len(new_combos),), dtype=int)
-    new_combo_map[idx] = one_vect
+    one_vect = np.ones(shape=(len(new_combos),), dtype=np.float32)
+    combo_map[idx] = one_vect
 
     # Finally we need to update the new lone class dictionary by
     # checking where the column sum equals 1
     class_map = _infer_lone_class(z)
-    return {"class_map": class_map, "combo_map": new_combo_map}
+    return class_map, combo_map
 
 
 def _inexact_search(z: np.ndarray, rng: np.random.RandomState,
-                    class_sim: np.ndarray, combo_sim: np.ndarray,
-                    max_iter: int, is_min: bool, mixing_factor: float) -> dict:
+                    class_sim: dict, combo_sim: dict,
+                    max_iter: int, is_min: bool, mixing_factor: float,
+                    combo_idx: dict) -> dict:
     """Performs inexact local search for one iteration
     """
 
     # Compute the objective value for the starting solution
     z_best = np.copy(z)
     class_map, combo_map = _infer_dvs(z_best)
-    obj_val = _compute_objective(class_sim=class_sim, combo_sim=combo_sim,
+    obj_val = _compute_objective(np.array(list(class_sim.values())),
+                                 np.array(list(combo_sim.values())),
                                  class_map=class_map, combo_map=combo_map)
     n_iter = 0
     change_z = True
-
-    # Grab the indices that correspond to the various combinations to help
-    # us infer the decision variables with the _update_dvs function
-    n_class = z.shape[0]
-    combos = list(combinations(range(n_class), 2))
-    combo_idx = dict(zip(combos, range(len(combos))))
 
     # Continuously loop until we reach the local search termination
     # condition
@@ -319,6 +383,7 @@ def _inexact_search(z: np.ndarray, rng: np.random.RandomState,
         # Check if we"ve hit the upper bound on the number of allowed
         # iterations
         if n_iter >= max_iter:
+            print("Reached max iterations; consider adding more")
             break
 
         # Generate every possible move we can make and then permute the
@@ -341,33 +406,35 @@ def _inexact_search(z: np.ndarray, rng: np.random.RandomState,
                 if not _check_balance(z_neighbor, mixing_factor=mixing_factor):
                     continue
 
-            # Infer the new DVs
-            dv_dict = _update_dvs(
-                z=z_neighbor, z_best=z_best, combo_map=combo_map,
-                move_dict=move_dict, combo_idx=combo_idx
-            )
-            new_class_map = dv_dict["class_map"]
-            new_combo_map = dv_dict["combo_map"]
+            # Infer the assignment changes
+            change_list = _find_assignment_changes(z_neighbor, z_best,
+                                                   move_dict)
 
-            # Compute the new objective value
-            new_obj_val = _compute_objective(
-                class_sim=class_sim, combo_sim=combo_sim,
-                class_map=new_class_map, combo_map=new_combo_map
+            # Get the similarity values for the assignment changes
+            sim_dict = _get_change_similarity(combo_sim, class_sim,
+                                              change_list)
 
+            # Compute the change in the objective value
+            obj_change = _compute_obj_change(
+                sim_dict["old_combo_sim"], sim_dict["new_combo_sim"],
+                sim_dict["old_class_sim"], sim_dict["new_class_sim"]
             )
 
             # Check if the new value is better depending on whether we're
             # minimizing or maximizing the objective
             if is_min:
-                check = (new_obj_val < obj_val)
+                check = obj_change < 0
             else:
-                check = (new_obj_val > obj_val)
+                check = obj_change > 0
 
             if check:
                 z_best = np.copy(z_neighbor)
-                obj_val = new_obj_val
-                combo_map = new_combo_map.copy()
-                class_map = new_class_map.copy()
+                obj_val += obj_change
+                class_map, combo_map = _update_dvs(
+                    z=z_best, old_combos=change_list[0],
+                    new_combos=change_list[1], combo_map=combo_map,
+                    combo_idx=combo_idx
+                )
                 n_iter += 1
                 change_z = True
                 break
@@ -378,8 +445,8 @@ def _inexact_search(z: np.ndarray, rng: np.random.RandomState,
 
 def _single_search(seed: int, n_label: int, n_class: int, max_try: int,
                    mixing_factor: float, is_min: bool,
-                   class_sim: np.ndarray, combo_sim: np.ndarray,
-                   max_iter: int) -> dict:
+                   class_sim: dict, combo_sim: dict,
+                   max_iter: int, combo_idx: dict) -> dict:
     """Performs local search to find the best label map given the
     provided starting point z
     """
@@ -397,13 +464,14 @@ def _single_search(seed: int, n_label: int, n_class: int, max_try: int,
     # Perform the local search for the starting solution
     return _inexact_search(
         z=z, rng=rng, class_sim=class_sim, combo_sim=combo_sim,
-        max_iter=max_iter, is_min=is_min, mixing_factor=mixing_factor
+        max_iter=max_iter, is_min=is_min, mixing_factor=mixing_factor,
+        combo_idx=combo_idx
     )
 
 
-def search(n_label: int, combo_sim: np.ndarray, class_sim: np.ndarray,
+def search(n_label: int, combo_sim: dict, class_sim: dict,
            n_init=10, mixing_factor=0.25, max_try=1000, is_min=True,
-           max_iter=1000) -> dict:
+           max_iter=10000) -> dict:
     """Performs local search n_init times and finds the best search
     given the provided starting point
     """
@@ -411,12 +479,16 @@ def search(n_label: int, combo_sim: np.ndarray, class_sim: np.ndarray,
     # Perform local search by going through each of the instances and
     # providing a random seed for each instance so we get reproducible
     # results
-    n_class = class_sim.shape[0]
+    n_class = np.array(list(class_sim.values())).shape[0]
+    n_combo = ((n_class * (n_class - 1)) // 2)
+    combo_idx = dict(zip(combinations(range(n_class), 2),
+                         range(n_combo)))
     with Parallel(n_jobs=-1, verbose=3) as p:
         best_local_solns = p(delayed(_single_search)(i, n_label, n_class,
                                                      max_try, mixing_factor,
                                                      is_min, class_sim,
-                                                     combo_sim, max_iter)
+                                                     combo_sim, max_iter,
+                                                     combo_idx)
                              for i in range(n_init))
 
     # Grab the objective values from each of the solutions, determine
