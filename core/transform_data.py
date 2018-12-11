@@ -9,7 +9,6 @@ import numpy as np
 from PIL import Image
 import h5py
 from joblib import Parallel, delayed
-import re
 
 
 class TransformData(object):
@@ -27,7 +26,7 @@ class TransformData(object):
     model_name: str
         Which neural network model to use
 
-    n_gpu: int
+    ngpu: int
         Number of GPUs used to make the image predictions
 
     batch_size: int
@@ -42,12 +41,12 @@ class TransformData(object):
 
     """
 
-    def __init__(self, data_path, save_path, model_name, n_gpu=2,
+    def __init__(self, data_path, save_path, model_name, ngpu=2,
                  batch_size=256, sample_approx=0.10, img_shape=(256, 256, 3)):
         self._data_path = data_path
         self._save_path = save_path
         self._model_name = model_name
-        self._n_gpu = n_gpu
+        self._ngpu = ngpu
         self._batch_size = batch_size
         self._sample_approx = sample_approx
 
@@ -55,12 +54,36 @@ class TransformData(object):
         self._height, self._width, self._n_channel = img_shape
 
     @staticmethod
-    def _get_label(file: str) -> int:
-        """Determines the class label from the file name
+    def _get_labels(files: np.ndarray) -> np.ndarray:
         """
-        m = re.search("/[0-9]{1,4}/", file)
-        m = re.search("[0-9]{1,4}", m.group(0))
-        return int(m.group(0))
+        Infers the labels from the provided image files
+        """
+
+        # We expect a file to have a format:
+        # /path/to/file/data/label/filename.jpg and so we need to go two
+        # levels up to get a list of all targets in the data
+        targets = os.path.dirname(os.path.dirname(files[0]))
+
+        # Using targets we will generate a dictionary like {airport => 0, ...}
+        # and this will help us map the names found in the files to their
+        # numeric values
+        label_dict = dict(zip(targets, range(len(targets))))
+
+        # To determine the label of a target, we expect our directory
+        # that has the form
+        # airport
+        #   ....
+        # airport_hangar
+        #   ...
+        # and so forth
+        # therefore we need to determine which folder the file belongs in
+        # and using this we can determine its label
+        dirs = [os.path.dirname(file) for file in files]
+        labels = [os.path.basename(val) for val in dirs]
+
+        # Finally we need to map the labels we just inferred to their numeric
+        # values using the dictionary we just created
+        return np.array([label_dict[label] for label in labels]).reshape(-1, 1)
 
     def _get_img_files(self) -> dict:
         """Gets all of the image files and their corresponding labels
@@ -74,9 +97,10 @@ class TransformData(object):
 
         # Using the files, get the class labels
         print("Grabbing image labels")
-        with Parallel(n_jobs=1) as p:
-            labels = p(delayed(self._get_label)(file) for file in img_files)
-        labels = np.array(labels).reshape(-1, 1)
+        # with Parallel(n_jobs=1) as p:
+        #     labels = p(delayed(self._get_label)(file) for file in img_files)
+        # labels = np.array(labels).reshape(-1, 1)
+        labels = self._get_labels(img_files)
         return {"img_files": img_files, "labels": labels}
 
     def _define_model(self):
@@ -99,7 +123,7 @@ class TransformData(object):
                                       input_shape=(self._height, self._width,
                                                    self._n_channel),
                                       pooling="max")
-        model = multi_gpu_model(model=model, gpus=self._n_gpu)
+        model = multi_gpu_model(model=model, gpus=self._ngpu)
         return model
 
     @staticmethod
@@ -118,16 +142,16 @@ class TransformData(object):
 
             # Reshape the images
             img_shape = (self._height, self._width)
-            imgs = p(delayed(self._create_thumbnail)(img, img_shape)
+            imgs = p(delayed(self._resize_img)(img, img_shape)
                      for img in imgs)
 
             # Convert the image to numpy arrays
             imgs = p(delayed(np.array)(img) for img in imgs)
         return np.array(imgs)
 
-    def _image_generator(self, img_files: list, mean: float,
-                         steps: int) -> np.ndarray:
-        """Defines the image generator object we will use to make our
+    def _image_generator(self, img_files: list, steps: int) -> np.ndarray:
+        """
+        Defines the image generator object we will use to make our
         transformations
         """
         for i in range(steps):
@@ -137,35 +161,16 @@ class TransformData(object):
             imgs = self._get_imgs(files)
 
             # Standardize the images
-            yield (imgs - mean)
+            yield imgs
 
     @staticmethod
-    def _create_thumbnail(img: Image.Image, new_shape: tuple) -> Image.Image:
-        """Creates a thumbnail
+    def _resize_img(img: Image.Image, new_shape: tuple) -> Image.Image:
+        """
+        Re-sizes the image to the desired shape
         """
         return img.resize(new_shape)
 
-    def _compute_running_mean(self, img_files: np.ndarray) -> float:
-        """Computes the running mean to
-        """
-        rng = np.random.RandomState(17)
-        idx = rng.choice(np.arange(len(img_files)),
-                         size=np.ceil(self._sample_approx
-                                      * len(img_files)).astype(int),
-                         replace=False)
-        files = img_files[idx]
-
-        mu = 0.
-        for i, file in enumerate(files):
-            if i == 0:
-                mu = self._get_imgs(np.array([file])).mean()
-            else:
-                x = self._get_imgs(np.array([file])).mean()
-                mu_prev = mu
-                mu = mu_prev + ((x - mu_prev) / (i + 1))
-        return mu
-
-    def transform(self) -> np.ndarray:
+    def transform(self):
         """Gets the transformations from the Xception model
         """
 
@@ -180,14 +185,9 @@ class TransformData(object):
             steps = int(np.floor(len(file_dict["img_files"]) /
                                  self._batch_size)) + 1
 
-        # Approximate the mean and standard deviation of the images in
-        # the data
-        print("Computing image mean")
-        mu = self._compute_running_mean(file_dict["img_files"])
-
         # Define our image generator
         img_gen = self._image_generator(
-            img_files=file_dict["img_files"], mean=mu, steps=steps
+            img_files=file_dict["img_files"], steps=steps
         )
 
         # Define the model we will use to transform the data
@@ -204,4 +204,4 @@ class TransformData(object):
         f = h5py.File(self._save_path, "w")
         f.create_dataset("data", data=data)
         f.close()
-        return data
+        return None
