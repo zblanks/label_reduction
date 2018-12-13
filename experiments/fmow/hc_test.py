@@ -1,5 +1,5 @@
 from core.hc import flat_model, hierarchical_model, hc_pred
-from core.kmeans import kmeans_mean
+from core.group_labels import group_labels
 from os import path
 import h5py
 import argparse
@@ -32,11 +32,12 @@ def gen_id(args: dict):
     ni = list(map(str, [args["niter"]] * n))
     um = list(map(str, [args["use_meta"]] * n))
     rn = list(map(str, [args["run_num"]] * n))
+    ga = [args["group_algo"]] * n
 
     # Generate the strings used for the SHA algorithm
     hashes = [""] * n
     for i in range(n):
-        tmp_str = "_".join((rn[i], m[i], e[i], ni[i], um[i], k_vals[i]))
+        tmp_str = "_".join((rn[i], m[i], e[i], ni[i], um[i], k_vals[i], ga[i]))
         tmp_str = tmp_str.encode("UTF-8")
         hashes[i] = hashlib.sha1(tmp_str).hexdigest()
     return hashes
@@ -59,7 +60,8 @@ def create_experiment_df(args: dict, ids: list):
               "estimator": np.repeat([args["estimator"]], n),
               "use_meta": np.repeat([args["use_meta"]], n),
               "niter": np.repeat([args["niter"]], n),
-              "k": k_vals}
+              "k": k_vals,
+              "group_algo": np.repeat([args["group_algo"]], n)}
     )
     return df
 
@@ -93,7 +95,8 @@ def get_best_k(X_train: np.ndarray, y_train: np.ndarray, args: dict):
         print("Searching over k = {}".format(args["k_vals"][i]))
         # Infer the groups for the given value of k and train the HC
         start_time = time()
-        label_groups[i] = kmeans_mean(train_X, train_y, args["k_vals"][i])
+        label_groups[i] = group_labels(train_X, train_y, args["k_vals"][i],
+                                       args["group_algo"])
         cluster_time = time() - start_time
 
         k_res[i] = hierarchical_model(
@@ -186,6 +189,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("run_num", type=int)
     parser.add_argument("method", type=str)
+    parser.add_argument("group_algo", type=str)
     parser.add_argument("estimator", type=str)
     parser.add_argument("use_meta", type=int)
     parser.add_argument("--niter", type=int, nargs="?", default=10)
