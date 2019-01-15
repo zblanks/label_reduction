@@ -1,0 +1,391 @@
+from core.hc import flat_model, hierarchical_model, hc_pred
+from core.group_labels import group_labels
+import hashlib
+import pandas as pd
+import numpy as np
+from time import time
+import h5py
+from sklearn.model_selection import train_test_split, StratifiedShuffleSplit
+from sklearn.utils import resample
+import os
+import pickle
+
+
+def gen_id(args: dict):
+    """
+    Generates the id(s) for our data using a SHA algorithm
+    """
+
+    # If we're working with a flat model then the k_vals = -1 since it does
+    # not matter; otherwise, we need to map the values to strings
+    if args["method"] == "f":
+        k_vals = ["-1"]
+    else:
+        k_vals = list(map(str, args["k_vals"]))
+
+    # Identify the non-string elements and map their values to strings
+    # so we can more easily hash them
+    non_str_keys = []
+    for key in args.keys():
+        if not isinstance(args[key], str):
+            non_str_keys.append(key)
+
+    # Convert the non-string keys to strings so that we can work with the
+    # hashing algorithm
+    n = len(k_vals)
+    hashes = [""] * n
+    str_keys = np.setdiff1d(list(args.keys()), non_str_keys)
+    n_keys = len(args.keys())
+    for i in range(n):
+        # Define a temporary list to hold the values before we combine them
+        # into a single string
+        tmp_list = [""] * n_keys
+
+        # Convert and add the non-string values to our temp list
+        for (j, key) in enumerate(non_str_keys):
+            tmp_list[j] = str(args[key])
+
+        # Add the remaining keys
+        for (j, key) in zip(range(len(non_str_keys), n_keys), str_keys):
+            tmp_list[j] = args[key]
+
+        # Using the values from the temporary list we're going to combine
+        # them into a single string and then generate the hash
+        tmp_str = "_".join(tmp_list).encode("UTF-8")
+        hashes[i] = hashlib.sha1(tmp_str).hexdigest()
+
+    return hashes
+
+
+def create_experiment_df(args: dict, ids: list):
+    """
+    Creates a DataFrame detailing the settings for a given experiment
+    """
+
+    # Get the number of meta-classes for a given run
+    n = len(ids)
+    if args["method"] == "f":
+        k_vals = [-1]
+    else:
+        k_vals = args["k_vals"]
+
+    # We need to iterate through the keys of the args dictionary and generate
+    # a dictionary which will hold our experiment settings data
+    data = {}
+    for key in args.keys():
+        if key != "method":
+            data[key] = np.repeat([args[key]], n)
+        else:
+            data["k"] = k_vals
+
+    # Add the hash IDs
+    data["id"] = ids
+
+    # Build the final DataFrame
+    return pd.DataFrame(data)
+
+
+def build_group_df(ids: list, label_groups: np.ndarray) -> pd.DataFrame:
+    """
+    Builds the label grouping DataFrame so we can perform further analysis
+    on the grouping at a later time
+    """
+
+    # Get the grouping vector for each label
+    group_vect = label_groups.flatten()
+
+    # Repeat the ID and label columns
+    n_vals, nclasses = label_groups.shape
+    id_vect = np.repeat(ids, nclasses)
+    label_vect = np.tile(np.arange(nclasses), n_vals)
+
+    return pd.DataFrame({"id": id_vect, "label": label_vect,
+                         "group": group_vect})
+
+
+def build_search_df(ids: list, k_res: list) -> pd.DataFrame:
+    """
+    Builds a DataFrame that stores the validation results
+    """
+
+    # Get the values from the various stored metrics
+    n = len(k_res)
+    acc_vals = [k_res[i]["acc"] for i in range(n)]
+    auc_vals = [k_res[i]["auc"] for i in range(n)]
+    train_times = [k_res[i]["train_time"] for i in range(n)]
+    cluster_times = [k_res[i]["cluster_time"] for i in range(n)]
+
+    # Build the DataFrame
+    metrics = ["top1", "auc", "train_time", "cluster_time"]
+    nmetrics = len(metrics)
+
+    search_df = pd.DataFrame(
+        data={"id": np.tile(ids, nmetrics),
+              "metric": np.repeat(metrics, len(ids)),
+              "value": np.concatenate([acc_vals, auc_vals, train_times,
+                                       cluster_times])}
+    )
+
+    return search_df
+
+
+def train_hc(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
+             y_val: np.ndarray, args: dict, rng: np.random.RandomState):
+    """
+    Searches over every label grouping and gets the best HC
+    """
+
+    # First get the label groupings for each of the provided k_vals for
+    n = len(args["k_vals"])
+    k_res = [dict()] * n
+    nlabels = len(np.unique(y_train))
+    label_groups = np.empty(shape=(n, nlabels), dtype=np.int32)
+    for i in range(n):
+        print("Searching over k = {}".format(args["k_vals"][i]))
+
+        # Infer the label groups
+        start_time = time()
+        label_groups[i, :] = group_labels(X_train, y_train, args["k_vals"][i],
+                                          args["group_algo"])
+        cluster_time = time() - start_time
+
+        # Fixing the label groups, get the best HC over the hyper-parameter
+        # space
+        k_res[i] = hierarchical_model(
+            X_train, y_train, X_val, y_val, label_groups[i, :], rng,
+            args["estimator"], args["niter"]
+        )
+
+        # Add the cluster time
+        k_res[i]["cluster_time"] = cluster_time
+
+    # Get the best model
+    best_model = np.array([k_res[i]["acc"] for i in range(n)]).argmax()
+
+    # Return all of the models so we can get validation results and the
+    # best model so we can evaluate it out-of-sample
+    return {"all_models": k_res, "final_model": k_res[best_model]["models"],
+            "label_groups": label_groups, "best_model": best_model}
+
+
+def prep_data(datapath: str, savepath: str, rng: np.random.RandomState,
+              downsample_prop=0.50) -> dict:
+    """
+    Prepares the data by forming the train-validation-test split,
+    saves y_test to disk, and bootstraps the training data
+    """
+
+    # Load the data from disk
+    f = h5py.File(datapath, "r")
+    X = np.array(f["X"])
+    y = np.array(f["y"])
+    f.close()
+
+    # If we need to, we will down-sample the data proportional to y so
+    # that we can decrease computation time
+    if downsample_prop > 0.:
+        # If the proportion is more than 0, then we will downsample the data
+        # accordingly
+        splitter = StratifiedShuffleSplit(
+            n_splits=1, test_size=(1 - downsample_prop), random_state=17
+        )
+
+        idx = splitter.split(X, y)
+        idx = [val for val in idx]
+        new_idx = idx[0][0]
+        X = X[new_idx]
+        y = y[new_idx]
+
+    # First generate the train-test split
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=17
+    )
+
+    # Now generate the train-validation split
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_train, y_train, test_size=0.2, random_state=17
+    )
+
+    # Save y_test to disk so that we can work with it later
+    pd.Series(y_test).to_csv(savepath, index=False)
+
+    # Finally we will bootstrap the training data so that we can have a
+    # distribution of estimator performance
+    X_train, y_train = resample(X_train,  y_train, random_state=rng)
+
+    return {"X_train": X_train, "y_train": y_train, "X_val": X_val,
+            "y_val": y_val, "X_test": X_test}
+
+
+def fit_fc(data_dict: dict, rng: np.random.RandomState, args: dict, ids: list):
+    """
+    Fits and gets the out-of-sample predictions for a FC
+    """
+
+    # Train/predict the FC
+    X_train = data_dict["X_train"]
+    y_train = data_dict["y_train"]
+    X_val = data_dict["X_val"]
+    y_val = data_dict["y_val"]
+    X_test = data_dict["X_test"]
+    res = flat_model(X_train, y_train, X_val, y_val, X_test, rng,
+                     args["estimator"], args["niter"])
+
+    # Prepare the results DataFrame
+    fc_df = pd.DataFrame({"id": ids, "metric": ["train_time"],
+                          "value": [res["train_time"]]})
+
+    # Return the preliminary results DataFrame and the out-of-sample pred
+    return {"proba_pred": res["proba_pred"], "fc_df": fc_df}
+
+
+def fit_hc(data_dict: dict, rng: np.random.RandomState, args: dict, ids: list):
+    """
+    Fits an HC, gets the test predictions, and generates results DataFrames
+    """
+
+    # First determine the best model across all meta-class groups
+    X_train = data_dict["X_train"]
+    y_train = data_dict["y_train"]
+    X_val = data_dict['X_val']
+    y_val = data_dict['y_val']
+    X_test = data_dict['X_test']
+    k_res = train_hc(X_train, y_train, X_val, y_val, args, rng)
+
+    # Using the best model get the test predictions
+    best_model = k_res['best_model']
+    res = hc_pred(k_res['final_model'], X_test,
+                  k_res['label_groups'][best_model, :])
+
+    # Build the group and validation search DataFrames
+    group_df = build_group_df(ids, k_res['label_groups'])
+    search_df = build_search_df(ids, k_res['all_models'])
+
+    return {"res": res, "group_df": group_df, "search_df": search_df,
+            "best_model": best_model}
+
+
+def save_fc_res(fc_res: dict, wd: str, exp_id: str):
+    """
+    Saves the results from the FC to disk
+    """
+
+    # Get the final elements from the FC model
+    proba_pred = fc_res["proba_pred"]
+    fc_df = fc_res["fc_df"]
+
+    # Save the probability prediction to disk
+    file = "f_" + exp_id + ".csv"
+    savepath = os.path.join(wd, "proba_pred", file)
+    np.savetxt(fname=savepath, X=proba_pred)
+
+    # Save the FC preliminary results to disk
+    file = os.path.join(wd, "fc_prelim_res.csv")
+    if os.path.exists(file):
+        fc_df.to_csv(file, mode="a", header=False, index=False)
+    else:
+        fc_df.to_csv(file, index=False)
+
+    return None
+
+
+def save_hc_res(hci_res: dict, wd: str, ids: list):
+    """
+    Saves the results from the HC to disk
+    """
+
+    # Save the validation and grouping results to disk
+    search_df = hci_res["search_df"]
+    group_df = hci_res["group_df"]
+
+    search_path = os.path.join(wd, "search_res.csv")
+    group_path = os.path.join(wd, "group_res.csv")
+
+    if os.path.exists(search_path):
+        search_df.to_csv(search_path, mode="a", header=False, index=False)
+    else:
+        search_df.to_csv(search_path, index=False)
+
+    if os.path.exists(group_path):
+        group_df.to_csv(group_path, mode="a", header=False, index=False)
+    else:
+        group_df.to_csv(group_path, index=False)
+
+    # Save the probability predictions to disk
+    best_id = ids[hci_res['best_model']]
+    root_path = "root_" + best_id + ".npy"
+    root_path = os.path.join(wd, "proba_pred", root_path)
+    root_proba_pred = hci_res['res']["root_proba_pred"]
+    np.save(root_path, root_proba_pred)
+
+    node_path = "node_" + best_id + ".pickle"
+    node_path = os.path.join(wd, "proba_pred", node_path)
+    node_proba_preds = hci_res['res']["node_proba_preds"]
+    with open(node_path, "wb") as p:
+        pickle.dump(node_proba_preds, p)
+
+    full_path = "hc_" + best_id + ".npy"
+    full_path = os.path.join(wd, "proba_pred", full_path)
+    proba_pred = hci_res['res']["proba_pred"]
+    np.save(full_path, proba_pred)
+
+    # Save the good indices to disk so we can correct y_test later
+    idx_path = "idx_" + best_id + ".npy"
+    idx_path = os.path.join(wd, "proba_pred", idx_path)
+    np.save(idx_path, hci_res['res']['good_idx'])
+
+    return None
+
+
+def run_model(args: dict):
+    """
+    Runs the experiment by fitting the model to data and saves results to disk
+    for analysis at a later time
+
+    Notes
+    At minimum, we assume that args contains the following keys:
+
+    run_num: the run number for the particular experiment
+    method: the algorithmic method to employ for the experiment
+    group_algo: grouping algorithm to use to find meta-classes
+    estimator: the ML estimator to use for the experiment
+    niter: number of values to search over during hyper-parameter search
+    wd: working directory to save results to disk
+
+    There could be others depending on the experiment settings for a particular
+    data set
+    """
+
+    # First we need to read in and prepare the data
+    wd = args["wd"]
+    datapath = os.path.join(wd, "data.h5")
+    savepath = os.path.join(wd, "test_labels.csv")
+    rng = np.random.RandomState(args["run_num"])
+    if "downsample_prop" in args.keys():
+        data_dict = prep_data(datapath, savepath, rng, args["downsample_prop"])
+    else:
+        data_dict = prep_data(datapath, savepath, rng)
+
+    # Second we need to generate a set of identifying IDs for the experiments
+    ids = gen_id(args)
+
+    # Third we need to fit the model given the appropriate method
+    if args["method"] == "f":
+        fc_res = fit_fc(data_dict, rng, args, ids)
+        save_fc_res(fc_res, wd, ids[0])
+
+    elif args["method"] == "hci":
+        hci_res = fit_hc(data_dict, rng, args, ids)
+        save_hc_res(hci_res, wd, ids)
+
+    # Finally we need to record the various experimental settings for
+    # further analysis at a later time
+    exp_df = create_experiment_df(args, ids)
+    exp_path = os.path.join(wd, "experiment_settings.csv")
+    if os.path.exists(exp_path):
+        exp_df.to_csv(exp_path, mode="a", header=False, index=False)
+    else:
+        exp_df.to_csv(exp_path, index=False)
+
+    # Return Nothing; we have already saved all that we need to disk
+    return None

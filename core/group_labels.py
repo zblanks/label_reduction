@@ -4,7 +4,6 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 
 
-
 def _build_v_mat(X: np.ndarray, y: np.ndarray) -> np.ndarray:
     """
     Computes the V matrix from X and y
@@ -39,14 +38,6 @@ def _compute_var(X: np.ndarray, y: np.ndarray, label: int) -> float:
     return X[idx, :].var()
 
 
-def _get_expected_format(z: np.ndarray, k: int) -> list:
-    """
-    Takes the label assignments and puts them in their expected output format
-    of a list of lists (ex: [[1, 2], [3]])
-    """
-    return [np.where(z == i)[0].tolist() for i in range(k)]
-
-
 def _kmeans_mean(V: np.ndarray, k: int, ninit: int):
     """
     Runs the kmeans-means variant of label reduction
@@ -54,10 +45,7 @@ def _kmeans_mean(V: np.ndarray, k: int, ninit: int):
 
     # Cluster the centroids
     kmeans = KMeans(n_clusters=k, random_state=17, n_jobs=-1, n_init=ninit)
-    assignments = kmeans.fit_predict(V)
-
-    # Get the assignments into the expected format
-    return _get_expected_format(assignments, k)
+    return kmeans.fit_predict(V)
 
 
 def group_labels(X: np.ndarray, y: np.ndarray, k: int,
@@ -86,7 +74,6 @@ def group_labels(X: np.ndarray, y: np.ndarray, k: int,
         # need to call it using joblib
         label_groups = _kmeans_mean(V, k, ninit)
     else:
-        z = run_coord_desc(V, label_vars, y, k, ninit)
-        label_groups = _get_expected_format(z, k)
+        label_groups = run_coord_desc(V, label_vars, y, k, ninit)
 
     return label_groups

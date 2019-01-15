@@ -160,8 +160,8 @@ cpdef _run_search(np.ndarray[DOUBLE, ndim=2] V, np.ndarray[INT, ndim=1] z,
         DOUBLE obj_val_old
         int c = V.shape[0]
         int l = mu.shape[0]
-        np.ndarray[INT, ndim=1] metaclasses = np.arange(l)
-        np.ndarray[INT, ndim=1] labels = np.arange(c)
+        np.ndarray[INT, ndim=1] metaclasses = np.arange(l, dtype=np.int32)
+        np.ndarray[INT, ndim=1] labels = np.arange(c, dtype=np.int32)
         np.ndarray[INT, ndim=1] label_options
         int iter_num
         int i
