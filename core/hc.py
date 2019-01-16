@@ -194,13 +194,16 @@ def hierarchical_model(X_train: np.ndarray, y_train: np.ndarray,
     # Train each of the nodes
     start_time = time()
 
+    X_val_rep = repeat(X_val)
+    y_val_rep = repeat(y_val)
     niter_rep = repeat(niter)
     rng_rep = repeat(rng)
     estimator_rep = repeat(estimator)
     method_rep = repeat("hci")
     with Pool() as p:
-        models = p.starmap(train_node, zip(X_list, y_list, niter_rep, rng_rep,
-                                           estimator_rep, method_rep))
+        models = p.starmap(train_node, zip(X_list, y_list, X_val_rep, y_val_rep,
+                                           niter_rep, rng_rep, estimator_rep,
+                                           method_rep))
     train_time = time() - start_time
 
     # Get the test set predictions

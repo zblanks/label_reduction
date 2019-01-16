@@ -8,7 +8,6 @@ import h5py
 from sklearn.model_selection import train_test_split, StratifiedShuffleSplit
 from sklearn.utils import resample
 import os
-import pickle
 
 
 def gen_id(args: dict):
@@ -27,6 +26,10 @@ def gen_id(args: dict):
     # so we can more easily hash them
     non_str_keys = []
     for key in args.keys():
+        # Check for the k_vals which we will ignore
+        if key == "k_vals":
+            continue
+
         if not isinstance(args[key], str):
             non_str_keys.append(key)
 
@@ -34,20 +37,25 @@ def gen_id(args: dict):
     # hashing algorithm
     n = len(k_vals)
     hashes = [""] * n
-    str_keys = np.setdiff1d(list(args.keys()), non_str_keys)
-    n_keys = len(args.keys())
+    str_keys = np.setdiff1d(list(args.keys()), non_str_keys + ["k_vals"])
     for i in range(n):
         # Define a temporary list to hold the values before we combine them
         # into a single string
-        tmp_list = [""] * n_keys
+        tmp_list = []
 
         # Convert and add the non-string values to our temp list
-        for (j, key) in enumerate(non_str_keys):
-            tmp_list[j] = str(args[key])
+        for key in non_str_keys:
+            tmp_list.append(str(args[key]))
 
         # Add the remaining keys
-        for (j, key) in zip(range(len(non_str_keys), n_keys), str_keys):
-            tmp_list[j] = args[key]
+        for key in str_keys:
+            if key == "wd":
+                continue
+
+            tmp_list.append(args[key])
+
+        # Add the i-th k values
+        tmp_list.append(k_vals[i])
 
         # Using the values from the temporary list we're going to combine
         # them into a single string and then generate the hash
@@ -73,10 +81,16 @@ def create_experiment_df(args: dict, ids: list):
     # a dictionary which will hold our experiment settings data
     data = {}
     for key in args.keys():
+        # Exclude certain keys {k_vals, wd}
+        if key in ["k_vals", "wd"]:
+            continue
+
+        # Otherwise add it to the data dict
         if key != "method":
             data[key] = np.repeat([args[key]], n)
         else:
             data["k"] = k_vals
+            data["method"] = args['method']
 
     # Add the hash IDs
     data["id"] = ids
@@ -207,7 +221,8 @@ def prep_data(datapath: str, savepath: str, rng: np.random.RandomState,
     )
 
     # Save y_test to disk so that we can work with it later
-    pd.Series(y_test).to_csv(savepath, index=False)
+    if not os.path.exists(savepath):
+        pd.Series(y_test).to_csv(savepath, index=False, header=False)
 
     # Finally we will bootstrap the training data so that we can have a
     # distribution of estimator performance
@@ -275,9 +290,9 @@ def save_fc_res(fc_res: dict, wd: str, exp_id: str):
     fc_df = fc_res["fc_df"]
 
     # Save the probability prediction to disk
-    file = "f_" + exp_id + ".csv"
+    file = "f_" + exp_id + ".npy"
     savepath = os.path.join(wd, "proba_pred", file)
-    np.savetxt(fname=savepath, X=proba_pred)
+    np.save(savepath, proba_pred)
 
     # Save the FC preliminary results to disk
     file = os.path.join(wd, "fc_prelim_res.csv")
@@ -318,11 +333,10 @@ def save_hc_res(hci_res: dict, wd: str, ids: list):
     root_proba_pred = hci_res['res']["root_proba_pred"]
     np.save(root_path, root_proba_pred)
 
-    node_path = "node_" + best_id + ".pickle"
+    node_path = "node_" + best_id + ".npy"
     node_path = os.path.join(wd, "proba_pred", node_path)
     node_proba_preds = hci_res['res']["node_proba_preds"]
-    with open(node_path, "wb") as p:
-        pickle.dump(node_proba_preds, p)
+    np.save(node_path, node_proba_preds)
 
     full_path = "hc_" + best_id + ".npy"
     full_path = os.path.join(wd, "proba_pred", full_path)

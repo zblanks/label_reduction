@@ -10,6 +10,8 @@ def main():
     parser.add_argument("group_algo", type=str)
     parser.add_argument("estimator", type=str)
     parser.add_argument("use_meta", type=int)
+    parser.add_argument("--downsample_prop", type=float, nargs="?",
+                        default=0.25)
     parser.add_argument("--niter", type=int, nargs="?", default=10)
     parser.add_argument("--k_vals", type=int, nargs="*",
                         default=list(range(2, 62)))

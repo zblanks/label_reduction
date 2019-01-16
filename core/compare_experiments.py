@@ -399,42 +399,12 @@ def compute_flat_metrics(files: list, ids: list, y_true: np.ndarray,
     Computes the relevant metrics for an FC
     """
 
-    # Get the formated DataFrame
-    # n = len(files)
-    # df = format_res_df(n, ids)
-    # nmetrics = len(df['metric'].unique())
-
-    # Try in parallel
+    # Compute the metrics in parallel
     with Parallel(n_jobs=-1, verbose=5) as p:
         dfs = p(delayed(flat_parallel)(file, id_val, y_true, label_maps[id_val])
                 for (file, id_val) in zip(files, ids))
 
     df = pd.concat(dfs, ignore_index=True)
-
-    # # Go through each file, compute the relevant metric, and then add it
-    # # to the DataFrame
-    # count = 0
-    # for (file, id_val) in zip(files, ids):
-    #     # Read in the probability file
-    #     proba_pred = np.load(file)
-    #
-    #     # Compute each of the metrics
-    #     # leaf_auc = compute_auc(y_true, proba_pred)
-    #     leaf_top1 = top_k_accuracy(y_true, proba_pred, k=1)
-    #     leaf_top3 = top_k_accuracy(y_true, proba_pred, k=3)
-    #
-    #     # Compute the node metrics
-    #     y_node = remap_target(y_true, label_maps[id_val])
-    #     # node_proba_pred = remap_node_probs(proba_pred, label_maps[id_val])
-    #     # node_auc = compute_auc(y_node, node_proba_pred)
-    #     n_top1 = node_top1(y_node, proba_pred, label_maps[id_val])
-    #
-    #     # Combine all of the results and add them to the DataFrame
-    #     # res = [leaf_auc, leaf_top1, leaf_top3, node_auc, n_top1]
-    #     res = [leaf_top1, leaf_top3, n_top1]
-    #     df.loc[count:(count + nmetrics - 1), 'value'] = res
-    #     count += nmetrics
-
     return df
 
 
@@ -473,11 +443,6 @@ def compute_hc_metrics(leaf_files: list, node_files: list, ids: list,
     Computes the metrics for a HC
     """
 
-    # Get the formatted DataFrame
-    n = len(leaf_files)
-    # df = format_res_df(n, ids)
-    # nmetrics = len(df.metric.unique())
-
     # Compute the metrics in parallel to decrease time
     with Parallel(n_jobs=-1, verbose=5) as p:
         dfs = p(delayed(hc_parallel)(
@@ -488,44 +453,6 @@ def compute_hc_metrics(leaf_files: list, node_files: list, ids: list,
         )
 
     df = pd.concat(dfs, ignore_index=True)
-
-    # # Go through each file and compute the relevant metrics
-    # count = 0
-    # for (leaf_file, node_file, id_val, idx_file) in zip(leaf_files, node_files,
-    #                                                     ids, idx_files):
-    #     # Get the leaf and node files
-    #     leaf_proba_pred = np.load(leaf_file)
-    #     node_proba_pred = np.load(node_file)
-    #
-    #     # Get the list of good indices to ensure that we don't have an
-    #     # index error
-    #     # TODO: remove when done
-    #     try:
-    #         idx = np.load(idx_file)
-    #     except OSError:
-    #         idx = np.arange(leaf_proba_pred.shape[0])
-    #
-    #     # Update the y_true vector with the correct indices
-    #     true_y = y_true[idx]
-    #
-    #     # Check if the leaf_proba_pred has the same number of samples
-    #     # the true_y vector
-    #     assert true_y.shape[0] == leaf_proba_pred.shape[0]
-    #
-    #     # Compute the leaf metrics
-    #     leaf_auc = compute_auc(true_y, leaf_proba_pred)
-    #     leaf_top1 = top_k_accuracy(true_y, leaf_proba_pred, k=1)
-    #     leaf_top3 = top_k_accuracy(true_y, leaf_proba_pred, k=3)
-    #
-    #     # Compute the node level metrics
-    #     y_node = remap_target(y_true, label_maps[id_val])
-    #     node_auc = compute_auc(y_node, node_proba_pred)
-    #     n_top1 = top_k_accuracy(y_node, node_proba_pred, k=1)
-    #
-    #     # Combine all of the results and add them to the DataFrame
-    #     res = [leaf_auc, leaf_top1, leaf_top3, node_auc, n_top1]
-    #     df.loc[count:(count + nmetrics), 'value'] = res
-
     return df
 
 
@@ -538,15 +465,14 @@ def gen_id(id0: str, id1: str) -> str:
     return hashlib.sha1(hash_str).hexdigest()
 
 
-def format_boot_res(bootstrap_samples: int, pair_id: str, metric: str):
+def format_boot_res(bootstrap_samples: int, metric: str):
     """
     Generates the expected DataFrame output for the bootstrap distribution
     """
 
     # Define an empty DataFrame
     metric_vect = np.repeat(metric, bootstrap_samples)
-    exp_id_vect = np.repeat(pair_id, bootstrap_samples)
-    df = pd.DataFrame({"pair_id": exp_id_vect,
+    df = pd.DataFrame({"pair_id": "",
                        "niter": np.arange(bootstrap_samples),
                        "metric": metric_vect,
                        "value": np.empty(shape=(bootstrap_samples,))})
@@ -559,7 +485,9 @@ def format_pair_map_df(pair_id: str, id0: str, id1: str):
     Formats the DataFrame which maps the experiment pair back to their
     original settings
     """
-    return pd.DataFrame({"pair_id": pair_id, "id0": id0, "id1": id1})
+    df = pd.DataFrame({"pair_id": pair_id, "id0": id0, "id1": id1},
+                      index=[0])
+    return df
 
 
 def gen_boot_mean(metric_vals: np.ndarray, bootstrap_samples: int):
@@ -583,8 +511,7 @@ def mean_diff(mean0: np.ndarray, mean1: np.ndarray):
 
 
 def get_boot_distn(first_df: pd.DataFrame, second_df: pd.DataFrame,
-                   metric: str, bootstrap_samples: int, id0: str,
-                   id1: str):
+                   metric: str, bootstrap_samples: int):
     """
     Computes the bootstrap distribution comparing the first and second
     experiment to one another for a given metric
@@ -603,13 +530,9 @@ def get_boot_distn(first_df: pd.DataFrame, second_df: pd.DataFrame,
     diff_vect = mean_diff(mean0, mean1)
 
     # Store the results in a DataFrame
-    pair_id = gen_id(id0, id1)
-    df = format_boot_res(bootstrap_samples, pair_id, metric)
-    df['metric'] = diff_vect
-
-    # Get the experiment pair map
-    pair_df = format_pair_map_df(pair_id, id0, id1)
-    return df, pair_df
+    df = format_boot_res(bootstrap_samples, metric)
+    df['value'] = diff_vect
+    return df
 
 
 def get_all_boot_distns(first_df: pd.DataFrame, second_df: pd.DataFrame,
@@ -620,29 +543,25 @@ def get_all_boot_distns(first_df: pd.DataFrame, second_df: pd.DataFrame,
     """
 
     # Compute the distribution for each metric
-    metrics = first_df.metric.unique.tolist()
-    # nmetrics = len(metrics)
-    # pair_dfs = [pd.DataFrame()] * nmetrics
-    # boot_dfs = [pd.DataFrame()] * nmetrics
+    metrics = first_df.metric.unique().tolist()
 
+    # Compute the bootstrap results for each metric
     with Parallel(n_jobs=-1, verbose=5) as p:
         res = p(delayed(get_boot_distn)(first_df, second_df, metric,
-                                        bootstrap_samples, id0, id1)
+                                        bootstrap_samples)
                 for metric in metrics)
 
     # Get the final DataFrames
-    n = len(res)
-    boot_df = pd.concat([res[i][0] for i in range(n)], ignore_index=True)
-    pair_df = pd.concat([res[i][1] for i in range(n)], ignore_index=True)
+    boot_df = pd.concat(res, ignore_index=True)
 
-    # for i in range(nmetrics):
-    #     boot_dfs[i], pair_dfs[i] = get_boot_distn(
-    #         first_df, second_df, metrics[i], bootstrap_samples, id0, id1
-    #     )
-    #
-    # # Combine all of the DataFrames
-    # boot_df = pd.concat(boot_dfs, ignore_index=True)
-    # pair_df = pd.concat(pair_dfs, ignore_index=True)
+    # Get the pair DataFrame for this experiment
+    pair_id = gen_id(id0, id1)
+    pair_df = pd.DataFrame({"pair_id": pair_id, "id0": id0, "id1": id1},
+                           index=[0])
+    # pair_df = format_pair_map_df(pair_id, id0, id1)
+
+    # Add the ID to the boot results DataFrame
+    boot_df['pair_id'] = pair_id
     return boot_df, pair_df
 
 
@@ -752,7 +671,7 @@ def compare_experiments(exp_path: str, group_path: str, proba_path: str,
     prob_files = get_files(proba_path)
 
     # Second we need the target vector
-    y_true = pd.read_csv(label_path).values
+    y_true = pd.read_csv(label_path, header=None).values.flatten()
 
     # Third we need the experiment settings and grouping results
     exp_df = pd.read_csv(exp_path)
