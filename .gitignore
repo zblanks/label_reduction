@@ -35,3 +35,6 @@
 # Ignore __pycache__
 __pycache__/
 
+# Ignore .Rproj.user
+.Rproj.user/
+.Rproj.user
