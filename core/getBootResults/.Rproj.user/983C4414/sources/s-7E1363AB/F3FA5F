@@ -1,0 +1,22 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1548259695641.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "0",
+    "id" : "F3FA5F",
+    "lastKnownWriteTime" : 1548276935,
+    "last_content_update" : 1548276935622,
+    "path" : "C:/devspace/mycode/label_reduction/core/getBootResults/R/gen_tex_code.R",
+    "project_path" : "R/gen_tex_code.R",
+    "properties" : {
+        "cursorPosition" : "171,59",
+        "scrollLine" : "0"
+    },
+    "relative_order" : 2,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

@@ -13,7 +13,7 @@ from joblib import Parallel, delayed
 
 class TransformData(object):
     """Transforms the image data to a different feature space using
-    the Xception model trained on ImageNet
+    the a provided model trained on ImageNet
 
     Parameters
     ----------
@@ -32,23 +32,18 @@ class TransformData(object):
     batch_size: int
         Batch size to make the image transformations
 
-    sample_approx: float
-        Percent of the data to use to approximate the mean and standard
-        deviation
-
     img_shape: tuple
         Desired image shape
 
     """
 
     def __init__(self, data_path, save_path, model_name, ngpu=2,
-                 batch_size=256, sample_approx=0.10, img_shape=(256, 256, 3)):
+                 batch_size=256, img_shape=(256, 256, 3)):
         self._data_path = data_path
         self._save_path = save_path
         self._model_name = model_name
         self._ngpu = ngpu
         self._batch_size = batch_size
-        self._sample_approx = sample_approx
 
         # Define the default values for the image data
         self._height, self._width, self._n_channel = img_shape
@@ -83,9 +78,9 @@ class TransformData(object):
 
         # Finally we need to map the labels we just inferred to their numeric
         # values using the dictionary we just created
-        return np.array([label_dict[label] for label in labels]).reshape(-1, 1)
+        return np.array([label_dict[label] for label in labels])
 
-    def _get_img_files(self) -> dict:
+    def _get_img_files(self, **kwargs) -> dict:
         """Gets all of the image files and their corresponding labels
         """
 
@@ -97,10 +92,14 @@ class TransformData(object):
 
         # Using the files, get the class labels
         print("Grabbing image labels")
-        # with Parallel(n_jobs=1) as p:
-        #     labels = p(delayed(self._get_label)(file) for file in img_files)
-        # labels = np.array(labels).reshape(-1, 1)
-        labels = self._get_labels(img_files)
+
+        # If the labels have been passed in the **kwargs, then there is no
+        # need to compute them; otherwise, execute the _get_labels method
+        if 'y' in kwargs.keys():
+            labels = kwargs['y']
+        else:
+            labels = self._get_labels(img_files)
+
         return {"img_files": img_files, "labels": labels}
 
     def _define_model(self):
@@ -126,11 +125,23 @@ class TransformData(object):
         model = multi_gpu_model(model=model, gpus=self._ngpu)
         return model
 
+    # @staticmethod
+    # def _convert_img(img: Image.Image) -> Image.Image:
+    #     """Converts an image from gray-scale to RGB if necessary
+    #     """
+    #     return img.convert("RGB")
+
     @staticmethod
-    def _convert_img(img: Image.Image) -> Image.Image:
-        """Converts an image from gray-scale to RGB if necessary
+    def _resize_img(img: Image.Image, new_shape: tuple) -> Image.Image:
         """
-        return img.convert("RGB")
+        Re-sizes the image to the desired shape
+        """
+        # If the image is already at the desired shape then there's nothing
+        # that we need to do
+        if (img.height, img.width) == new_shape:
+            return img
+        else:
+            return img.resize(new_shape)
 
     def _get_imgs(self, img_files: np.ndarray) -> np.ndarray:
         """Reads in the images from img_files
@@ -138,11 +149,11 @@ class TransformData(object):
         # Read in the subset of images
         with Parallel(n_jobs=1) as p:
             imgs = p(delayed(Image.open)(file) for file in img_files)
-            imgs = p(delayed(self._convert_img)(img) for img in imgs)
+            # imgs = p(delayed(self._convert_img)(img) for img in imgs)
 
             # Reshape the images
-            img_shape = (self._height, self._width)
-            imgs = p(delayed(self._resize_img)(img, img_shape)
+            new_shape = (self._height, self._width)
+            imgs = p(delayed(self._resize_img)(img, new_shape)
                      for img in imgs)
 
             # Convert the image to numpy arrays
@@ -160,22 +171,21 @@ class TransformData(object):
                               (self._batch_size * (i+1))]
             imgs = self._get_imgs(files)
 
+            # Check the image size
+            print(imgs.shape)
+
             # Standardize the images
             yield imgs
 
-    @staticmethod
-    def _resize_img(img: Image.Image, new_shape: tuple) -> Image.Image:
+    def transform(self, **kwargs):
+        """Gets the transformed image data
         """
-        Re-sizes the image to the desired shape
-        """
-        return img.resize(new_shape)
 
-    def transform(self):
-        """Gets the transformations from the Xception model
-        """
+        # From the **kwargs, check if we already have the labels, if so, then
+        # there is no need to get them from the _get_img_files method
 
         # Get the image files and the corresponding labels
-        file_dict = self._get_img_files()
+        file_dict = self._get_img_files(**kwargs)
 
         # Determine the number of steps it will take to get through
         # transforming all of the images
@@ -195,13 +205,11 @@ class TransformData(object):
 
         # Get all of the transformations
         print("Transforming image data")
-        data = model.predict_generator(generator=img_gen, verbose=1,
-                                       steps=steps)
+        X = model.predict_generator(generator=img_gen, verbose=1, steps=steps)
 
-        # Put the data in the form we expect it to be for the
-        # SimilarityMeasure object
-        data = np.concatenate([data, file_dict["labels"]], axis=1)
+        # Put the data in the expected format
         f = h5py.File(self._save_path, "w")
-        f.create_dataset("data", data=data)
+        f.create_dataset("X", data=X)
+        f.create_dataset('y', data=file_dict['labels'])
         f.close()
         return None

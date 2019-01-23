@@ -333,10 +333,10 @@ def save_hc_res(hci_res: dict, wd: str, ids: list):
     root_proba_pred = hci_res['res']["root_proba_pred"]
     np.save(root_path, root_proba_pred)
 
-    node_path = "node_" + best_id + ".npy"
-    node_path = os.path.join(wd, "proba_pred", node_path)
-    node_proba_preds = hci_res['res']["node_proba_preds"]
-    np.save(node_path, node_proba_preds)
+    # node_path = "node_" + best_id + ".npy"
+    # node_path = os.path.join(wd, "proba_pred", node_path)
+    # node_proba_preds = hci_res['res']["node_proba_preds"]
+    # np.save(node_path, node_proba_preds)
 
     full_path = "hc_" + best_id + ".npy"
     full_path = os.path.join(wd, "proba_pred", full_path)
@@ -351,7 +351,7 @@ def save_hc_res(hci_res: dict, wd: str, ids: list):
     return None
 
 
-def run_model(args: dict):
+def run_model(args: dict, datapath: str):
     """
     Runs the experiment by fitting the model to data and saves results to disk
     for analysis at a later time
@@ -372,7 +372,6 @@ def run_model(args: dict):
 
     # First we need to read in and prepare the data
     wd = args["wd"]
-    datapath = os.path.join(wd, "data.h5")
     savepath = os.path.join(wd, "test_labels.csv")
     rng = np.random.RandomState(args["run_num"])
     if "downsample_prop" in args.keys():
