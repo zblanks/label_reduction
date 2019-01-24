@@ -5,7 +5,7 @@ library(getBootResults)
 args = commandArgs(trailingOnly = T)
 
 # Execute the source code and generate TeX tables
-gen_all_tex_code(args[1])
+gen_tex_code(args[1])
 
 # Generate the plots for each of the experiments
 gen_boot_plots(args[1])
