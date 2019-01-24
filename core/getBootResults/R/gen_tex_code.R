@@ -7,6 +7,7 @@
 #' @return DataFrame containing the ID the metric, and the mean difference
 #'
 #' @importFrom rlang .data
+#' @keywords internal
 get_avg_diff = function(boot_df, id, metric) {
 
   # Get the vector of bootstrap values for the (ID, metric) combo
@@ -28,6 +29,7 @@ get_avg_diff = function(boot_df, id, metric) {
 #'
 #' @return Vector containing the unique pair IDs
 #' @importFrom rlang .data
+#' @keywords internal
 get_uniq_ids = function(df) {
   uniq_ids = dplyr::distinct(df, .data$pair_id)
   return(dplyr::pull(uniq_ids))
@@ -41,6 +43,7 @@ get_uniq_ids = function(df) {
 #' experiments
 #'
 #' @importFrom rlang .data
+#' @keywords internal
 get_boot_table = function(boot_df) {
 
   # First infer all unique (ID, metric) combinations
@@ -66,6 +69,7 @@ get_boot_table = function(boot_df) {
 #' @param boot_df Bootstrap results DataFrame
 #'
 #' @return LaTeX code which can be saved to disk
+#' @keywords internal
 gen_boot_res_tex = function(boot_df) {
   # First we need to get the results DataFrame
   df = get_boot_table(boot_df)
@@ -94,6 +98,7 @@ gen_boot_res_tex = function(boot_df) {
 #' them
 #'
 #' @importFrom rlang .data
+#' @keywords internal
 get_exp_diff = function(pair_id, pair_df, exp_df) {
   # Using the unique pair_id, get the two experiment IDs from the pair_df
   # table
@@ -122,6 +127,18 @@ get_exp_diff = function(pair_id, pair_df, exp_df) {
                        setting1=vals[1], setting2=vals[2]))
 }
 
+#' Helper function to build the experiment difference DataFrame
+#'
+#' @param pair_df DataFrame defining the unique experiment pairs
+#' @param exp_df DataFrame detailing all experiment settings
+#'
+#' @return Experiment pair DataFrame
+#' @keywords internal
+build_exp_diff = function(pair_df, exp_df) {
+  uniq_ids = get_uniq_ids(pair_df)
+  return(purrr::map_df(.x=uniq_ids, .f=~get_exp_diff(.x, pair_df, exp_df)))
+}
+
 #' Generate the experiment difference TeX code
 #'
 #' @param pair_df DataFrame defining the unique experiment pairs
@@ -130,11 +147,11 @@ get_exp_diff = function(pair_id, pair_df, exp_df) {
 #' @return LaTeX code defining the unique experiments
 #'
 #' @importFrom rlang .data
+#' @keywords internal
 gen_exp_setting_tex = function(pair_df, exp_df) {
   # First we need to get each unique pair_id and then using this get all
   # of the unique experiment settings
-  uniq_ids = get_uniq_ids(pair_df)
-  setting_df = purrr::map_df(.x=uniq_ids, .f=~get_exp_diff(.x, pair_df, exp_df))
+  setting_df = build_exp_diff(pair_df, exp_df)
 
   # Update the experiment IDs to be numbers versus the full hashed ID
   setting_df$pair_id = 1:nrow(setting_df)
@@ -155,7 +172,7 @@ gen_exp_setting_tex = function(pair_df, exp_df) {
 #'
 #' @return Nothing; saves the .txt files to disk
 #' @export
-gen_all_tex_code = function(wd) {
+gen_tex_code = function(wd) {
   # Read in the DataFrames from disk
   boot_df = readr::read_csv(file.path(wd, "boot_res.csv"))
   pair_df = readr::read_csv(file.path(wd, "exp_pairs.csv"))

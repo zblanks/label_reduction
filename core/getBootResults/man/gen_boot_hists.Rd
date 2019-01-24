@@ -4,10 +4,12 @@
 \alias{gen_boot_hists}
 \title{Creates and saves the bootstrap histograms to disk}
 \usage{
-gen_boot_hists(pair_id, boot_df, exp_diff_df, savepath)
+gen_boot_hists(pair_combo, update_df, boot_df, exp_diff_df, savepath)
 }
 \arguments{
-\item{pair_id}{Unique experiment pair ID}
+\item{pair_combo}{Unique experiment pair ID}
+
+\item{update_df}{DataFrame which could add new data to help extend the plot}
 
 \item{boot_df}{Bootstrap results DataFrame}
 
@@ -21,3 +23,4 @@ Nothing; saves the plot to disk
 \description{
 Creates and saves the bootstrap histograms to disk
 }
+\keyword{internal}

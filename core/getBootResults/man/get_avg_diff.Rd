@@ -19,3 +19,4 @@ DataFrame containing the ID the metric, and the mean difference
 \description{
 Computes the average difference for a given metric (ex: leaf_top1)
 }
+\keyword{internal}

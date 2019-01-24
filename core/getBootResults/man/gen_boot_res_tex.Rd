@@ -15,3 +15,4 @@ LaTeX code which can be saved to disk
 \description{
 Generate the TeX code for the bootstrap results
 }
+\keyword{internal}

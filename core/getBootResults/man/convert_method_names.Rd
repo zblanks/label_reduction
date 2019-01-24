@@ -15,3 +15,4 @@ More read-able string for the given method
 \description{
 Converts the method names into a more read-able format for the plot title
 }
+\keyword{internal}

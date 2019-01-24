@@ -1,4 +1,5 @@
 from sklearn.linear_model import SGDClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, accuracy_score, roc_auc_score
 from sklearn.decomposition import PCA
@@ -17,8 +18,6 @@ def train_node(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
     """
     Trains a given node for any type of classifier
     """
-    # Split the data into training and validation
-    alpha_vals = 10**rng.uniform(-5, 5, niter)
 
     # Extract features for the model using PCA
     if method == "f" or method == "hci":
@@ -37,15 +36,25 @@ def train_node(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
                             class_weight="balanced", warm_start=True,
                             max_iter=1000, tol=1e-3, n_jobs=-1)
 
-    else:
-        clf = SGDClassifier(loss="hinge", random_state=rng,
-                            class_weight="balanced", warm_start=True,
-                            max_iter=1000, tol=1e-3, n_jobs=-1)
+        # Generate regularization values
+        alpha_vals = 10 ** rng.uniform(-5, 5, niter)
 
-    clfs = [copy(clf) for _ in range(niter)]
-    for i in range(niter):
-        clfs[i] = clfs[i].set_params(**{"alpha": alpha_vals[i]})
-        clfs[i].fit(X_train, y_train)
+        clfs = [copy(clf) for _ in range(niter)]
+        for i in range(niter):
+            clfs[i] = clfs[i].set_params(**{"alpha": alpha_vals[i]})
+            clfs[i].fit(X_train, y_train)
+
+    else:
+        clf = RandomForestClassifier(n_jobs=-1, random_state=rng,
+                                     class_weight="balanced")
+
+        # Generate forest sizes
+        ntrees = np.ceil(10 ** rng.uniform(2, 3, niter)).astype(int)
+
+        clfs = [copy(clf) for _ in range(niter)]
+        for i in range(niter):
+            clfs[i] = clfs[i].set_params(**{"n_estimators": ntrees[i]})
+            clfs[i].fit(X_train, y_train)
 
     val_losses = np.array([clfs[i].score(X_val, y_val) for i in range(niter)])
     best_model = val_losses.argmax()
