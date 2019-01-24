@@ -181,31 +181,45 @@ class TransformData(object):
         """Gets the transformed image data
         """
 
-        # From the **kwargs, check if we already have the labels, if so, then
-        # there is no need to get them from the _get_img_files method
+        # It is possible that we already have the image data in a matrix and
+        # thus all we have to do is define the model and then get the
+        # predictions
+        if 'X' in kwargs.keys():
+            # Define the model to transform the data
+            model = self._define_model()
 
-        # Get the image files and the corresponding labels
-        file_dict = self._get_img_files(**kwargs)
+            # Transform the image data
+            print("Transforming image data")
+            X = model.predict(kwargs['X'], verbose=1)
 
-        # Determine the number of steps it will take to get through
-        # transforming all of the images
-        if len(file_dict["img_files"]) % self._batch_size == 0:
-            steps = len(file_dict["img_files"]) / self._batch_size
+            # If X has been provided then we know y must have been given and
+            # thus we'll have it in the expected format to save to disk
+            file_dict = {"labels": kwargs['y']}
+
         else:
-            steps = int(np.floor(len(file_dict["img_files"]) /
-                                 self._batch_size)) + 1
+            # Get the image files and the corresponding labels
+            file_dict = self._get_img_files(**kwargs)
 
-        # Define our image generator
-        img_gen = self._image_generator(
-            img_files=file_dict["img_files"], steps=steps
-        )
+            # Determine the number of steps it will take to get through
+            # transforming all of the images
+            if len(file_dict["img_files"]) % self._batch_size == 0:
+                steps = len(file_dict["img_files"]) / self._batch_size
+            else:
+                steps = int(np.floor(len(file_dict["img_files"]) /
+                                     self._batch_size)) + 1
 
-        # Define the model we will use to transform the data
-        model = self._define_model()
+            # Define our image generator
+            img_gen = self._image_generator(
+                img_files=file_dict["img_files"], steps=steps
+            )
 
-        # Get all of the transformations
-        print("Transforming image data")
-        X = model.predict_generator(generator=img_gen, verbose=1, steps=steps)
+            # Define the model we will use to transform the data
+            model = self._define_model()
+
+            # Get all of the transformations
+            print("Transforming image data")
+            X = model.predict_generator(generator=img_gen, verbose=1,
+                                        steps=steps)
 
         # Put the data in the expected format
         f = h5py.File(self._save_path, "w")
