@@ -2,6 +2,7 @@ from keras.applications.xception import Xception
 from keras.applications.densenet import DenseNet201
 from keras.applications.inception_v3 import InceptionV3
 from keras.applications.inception_resnet_v2 import InceptionResNetV2
+from keras.applications.nasnet import NASNetLarge
 from keras.utils import multi_gpu_model
 from glob import glob
 import os
@@ -117,31 +118,29 @@ class TransformData(object):
             model = InceptionV3(include_top=False,
                                 input_shape=(self._height, self._width,
                                              self._n_channel), pooling="max")
+        elif self._model_name == "nasnet":
+            model = NASNetLarge(include_top=False,
+                                input_shape=(self._height, self._width,
+                                             self._n_channel), pooling="max")
         else:
             model = InceptionResNetV2(include_top=False,
                                       input_shape=(self._height, self._width,
                                                    self._n_channel),
                                       pooling="max")
-        model = multi_gpu_model(model=model, gpus=self._ngpu)
-        return model
 
-    # @staticmethod
-    # def _convert_img(img: Image.Image) -> Image.Image:
-    #     """Converts an image from gray-scale to RGB if necessary
-    #     """
-    #     return img.convert("RGB")
+        # Sometimes we only have one GPU so Keras will automatically detect
+        # this; otherwise we have to specify this setting
+        if self._ngpu <= 1:
+            return model
+        else:
+            return multi_gpu_model(model=model, gpus=self._ngpu)
 
     @staticmethod
     def _resize_img(img: Image.Image, new_shape: tuple) -> Image.Image:
         """
         Re-sizes the image to the desired shape
         """
-        # If the image is already at the desired shape then there's nothing
-        # that we need to do
-        if (img.height, img.width) == new_shape:
-            return img
-        else:
-            return img.resize(new_shape)
+        return img.resize(new_shape)
 
     def _get_imgs(self, img_files: np.ndarray) -> np.ndarray:
         """Reads in the images from img_files
@@ -152,7 +151,7 @@ class TransformData(object):
             # imgs = p(delayed(self._convert_img)(img) for img in imgs)
 
             # Reshape the images
-            new_shape = (self._height, self._width)
+            new_shape = (self._width, self._height)
             imgs = p(delayed(self._resize_img)(img, new_shape)
                      for img in imgs)
 
@@ -170,9 +169,6 @@ class TransformData(object):
             files = img_files[(self._batch_size * i):
                               (self._batch_size * (i+1))]
             imgs = self._get_imgs(files)
-
-            # Check the image size
-            print(imgs.shape)
 
             # Standardize the images
             yield imgs

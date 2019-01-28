@@ -1,6 +1,6 @@
 from sklearn.linear_model import SGDClassifier
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GridSearchCV, ShuffleSplit
 from sklearn.metrics import confusion_matrix, accuracy_score, roc_auc_score
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -9,12 +9,11 @@ import numpy as np
 from time import time
 from multiprocessing import Pool
 from itertools import repeat
-from copy import copy
 
 
-def train_node(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
-               y_val: np.ndarray, niter: int, rng: np.random.RandomState,
-               estimator: str, method: str) -> dict:
+def train_node(X: np.ndarray, y: np.ndarray, niter: int,
+               rng: np.random.RandomState, estimator: str,
+               method: str) -> dict:
     """
     Trains a given node for any type of classifier
     """
@@ -22,43 +21,42 @@ def train_node(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
     # Extract features for the model using PCA
     if method == "f" or method == "hci":
         scaler = StandardScaler()
-        X_train = scaler.fit_transform(X_train)
-        X_val = scaler.transform(X_val)
+        X = scaler.fit_transform(X)
         pca = PCA(n_components=50, random_state=rng)
-        X_train = pca.fit_transform(X_train)
-        X_val = pca.transform(X_val)
+        X = pca.fit_transform(X)
     else: # the paper did not say to take these actions therefore we will not
         pca = ""
         scaler = ""
 
+    # Define the estimator provided to the function
     if estimator == "log":
-        clf = SGDClassifier(loss="log", random_state=rng,
-                            class_weight="balanced", warm_start=True,
-                            max_iter=1000, tol=1e-3, n_jobs=-1)
+        model = SGDClassifier(loss="log", random_state=rng,
+                              class_weight="balanced", warm_start=True,
+                              max_iter=1000, tol=1e-3)
 
         # Generate regularization values
         alpha_vals = 10 ** rng.uniform(-5, 5, niter)
 
-        clfs = [copy(clf) for _ in range(niter)]
-        for i in range(niter):
-            clfs[i] = clfs[i].set_params(**{"alpha": alpha_vals[i]})
-            clfs[i].fit(X_train, y_train)
+        # Define the search grid
+        param_grid = {'alpha': alpha_vals}
 
     else:
-        clf = RandomForestClassifier(n_jobs=-1, random_state=rng,
-                                     class_weight="balanced")
+        model = RandomForestClassifier(random_state=rng,
+                                       class_weight="balanced")
 
         # Generate forest sizes
-        ntrees = np.ceil(10 ** rng.uniform(2, 3, niter)).astype(int)
+        ntrees = rng.randint(50, 150, size=niter)
 
-        clfs = [copy(clf) for _ in range(niter)]
-        for i in range(niter):
-            clfs[i] = clfs[i].set_params(**{"n_estimators": ntrees[i]})
-            clfs[i].fit(X_train, y_train)
+        # Define the search grid object
+        param_grid = {"n_estimators": ntrees}
 
-    val_losses = np.array([clfs[i].score(X_val, y_val) for i in range(niter)])
-    best_model = val_losses.argmax()
-    return {"clf": clfs[best_model], "pca": pca, "scaler": scaler}
+    # Define a train-validation split object for the GridSearch
+    rs = ShuffleSplit(n_splits=1, test_size=.20, random_state=rng)
+
+    # Fit the model
+    clf = GridSearchCV(model, param_grid, n_jobs=-1, refit=True, cv=rs)
+    clf.fit(X, y)
+    return {'clf': clf, 'pca': pca, 'scaler': scaler}
 
 
 def remap_labels(y: np.ndarray, label_groups: np.ndarray) -> np.ndarray:
@@ -73,8 +71,7 @@ def remap_labels(y: np.ndarray, label_groups: np.ndarray) -> np.ndarray:
     return y_new
 
 
-def flat_model(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
-               y_val: np.ndarray, X_test: np.ndarray,
+def flat_model(X_train: np.ndarray, y_train: np.ndarray, X_test: np.ndarray,
                rng: np.random.RandomState, estimator: str, niter=10) -> dict:
     """
     Trains the FC and gets the out of sample predictions
@@ -82,8 +79,8 @@ def flat_model(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
 
     # Train the model
     start_time = time()
-    models = train_node(X_train, y_train, X_val, y_val, niter, rng,
-                        estimator=estimator, method="f")
+    models = train_node(X_train, y_train, niter, rng, estimator=estimator,
+                        method='f')
     train_time = time() - start_time
 
     # Test the model
@@ -203,16 +200,20 @@ def hierarchical_model(X_train: np.ndarray, y_train: np.ndarray,
     # Train each of the nodes
     start_time = time()
 
-    X_val_rep = repeat(X_val)
-    y_val_rep = repeat(y_val)
-    niter_rep = repeat(niter)
-    rng_rep = repeat(rng)
-    estimator_rep = repeat(estimator)
-    method_rep = repeat("hci")
-    with Pool() as p:
-        models = p.starmap(train_node, zip(X_list, y_list, X_val_rep, y_val_rep,
-                                           niter_rep, rng_rep, estimator_rep,
-                                           method_rep))
+    # niter_rep = repeat(niter)
+    # rng_rep = repeat(rng)
+    # estimator_rep = repeat(estimator)
+    # method_rep = repeat("hci")
+    # with Pool() as p:
+    #     models = p.starmap(train_node, zip(X_list, y_list, niter_rep, rng_rep,
+    #                                        estimator_rep, method_rep))
+
+    nmodels = len(idx_list) + 1
+    models = [dict()] * nmodels
+    for i in range(nmodels):
+        models[i] = train_node(X_list[i], y_list[i], niter, rng, estimator,
+                               method='hci')
+
     train_time = time() - start_time
 
     # Get the test set predictions

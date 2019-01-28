@@ -2,6 +2,9 @@ import numpy as np
 from core.coord_desc import run_coord_desc
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
+from sklearn.metrics.pairwise import rbf_kernel
+import networkx as nx
+import community
 
 
 def _build_v_mat(X: np.ndarray, y: np.ndarray) -> np.ndarray:
@@ -48,8 +51,26 @@ def _kmeans_mean(V: np.ndarray, k: int, ninit: int):
     return kmeans.fit_predict(V)
 
 
+def _community_detection(V: np.ndarray):
+    """
+    Implements the community detection approach to grouping labels
+    """
+
+    # First we need to generate an affinity matrix of similarity values
+    scaler = StandardScaler()
+    V_new = scaler.fit_transform(V)
+    S = rbf_kernel(V_new)
+
+    # Infer the communities using the Louvain algorithm
+    partition = community.best_partition(nx.Graph(S))
+
+    # Convert the output to an array so it's in the same format as other
+    # return results
+    return np.array([partition[val] for val in partition.keys()])
+
+
 def group_labels(X: np.ndarray, y: np.ndarray, k: int,
-                 group_algo: str, ninit=10) -> list:
+                 group_algo: str, ninit=10) -> np.ndarray:
     """
     Helper function to group the labels in the data set given a grouping
     algorithm
@@ -63,17 +84,21 @@ def group_labels(X: np.ndarray, y: np.ndarray, k: int,
     # compute this
     V = _build_v_mat(X, y)
 
-    # The coordinate descent algorithm requires the variances of each of
-    # the labels also be computed
-    uniq_labels = np.unique(y)
-    label_vars = np.array([_compute_var(X, y, i) for i in uniq_labels])
-
     # Run the label grouping algorithm
     if group_algo == "kmm":
         # The kmeans algorithm automatically runs in parallel so we don't
         # need to call it using joblib
         label_groups = _kmeans_mean(V, k, ninit)
+
+    elif group_algo == "comm":
+        label_groups = _community_detection(V)
+
     else:
+        # The coordinate descent algorithm requires the variances of each of
+        # the labels also be computed
+        uniq_labels = np.unique(y)
+        label_vars = np.array([_compute_var(X, y, i) for i in uniq_labels])
+
         label_groups = run_coord_desc(V, label_vars, y, k, ninit)
 
     return label_groups

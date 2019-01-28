@@ -13,6 +13,20 @@ convert_method_names = function(setting) {
   }
 }
 
+#' Converts the grouping algorithm names
+#'
+#' @param setting The value for the experiment
+#'
+#' @return More readable string for the grouping algorithm
+#' @keywords internal
+convert_group_algo_name = function(setting) {
+  if (setting == "kmm") {
+    return("K-means Mean")
+  } else if (setting == "comm") {
+    return("Community Detection")
+  }
+}
+
 #' Helper function to count the number of unique entries in the specified
 #' columns of a DataFrame
 #'
@@ -65,7 +79,7 @@ infer_other_col = function(pair_df, exp_df, pair_combo) {
   # Subset the pair_df to just the pair_combo that we need and just
   # grab id0 and pair_id since we don't need id1
   df = dplyr::filter(pair_df, .data$pair_id %in% !!pair_combo)
-  df = dplyr::select(pair_df, .data$pair_id, .data$id0)
+  df = dplyr::select(df, .data$pair_id, .data$id0)
 
   # Join the new DataFrame with the experiment settings to get the information
   # to infer the other distinguishing column
@@ -118,7 +132,7 @@ infer_exp_combos = function(exp_diff_df, exp_df, pair_df) {
 
     # Go through each idx combination and check if that combo belongs
     # together
-    for (j in ncol(combo_idx)) {
+    for (j in 1:ncol(combo_idx)) {
       tmp_idx = combo_idx[, j]
       is_valid_combo = check_valid_combo(exp_diff_df, tmp_idx)
 
@@ -151,6 +165,18 @@ infer_exp_combos = function(exp_diff_df, exp_df, pair_df) {
   return(list("ids" = id_combos, "dfs" = combo_dfs))
 }
 
+#' Helper function to get the setting values for a given experiment
+#'
+#' @param exp_diff_df Experiment difference DataFrame
+#'
+#' @return Character vector of experiment settings
+#' @keywords internal
+get_experiment_settings = function(exp_diff_df) {
+  settings = dplyr::select(exp_diff_df[1, ], dplyr::starts_with("setting"))
+  settings = unname(c(settings, recursive=T))
+  return(settings)
+}
+
 #' Helper function to generate the plot and caption title based off the
 #' experiment distinguishing factor
 #'
@@ -160,13 +186,14 @@ infer_exp_combos = function(exp_diff_df, exp_df, pair_df) {
 #' @keywords internal
 gen_plot_titles = function(exp_diff_df) {
   # First we have to get the unique settings for the experiment
-  settings = dplyr::select(exp_diff_df[1, ], dplyr::starts_with("setting"))
-  settings = unname(c(settings, recursive=T))
+  settings = get_experiment_settings(exp_diff_df)
 
   # Depending on what the distinguisher is, we have to adjust the settings
   # accordingly
   if (exp_diff_df$distinguisher[1] == "method") {
     settings = purrr::map_chr(.x=settings, .f=convert_method_names)
+  } else if (exp_diff_df$distinguisher[1] == "group_algo") {
+    settings = purrr::map_chr(.x=settings, .f=convert_group_algo_name)
   }
 
   # Using the updated names, generate the plot and caption titles
@@ -278,16 +305,29 @@ gen_boot_hists = function(pair_combo, update_df, boot_df, exp_diff_df,
   # We need to generate the plot differently depending on how many elements
   # are in the pair_combo
   ncombos = length(pair_combo)
+
+  # Get the base names for the filepath
+  plot_base = new_exp_diff_df$distinguisher[1]
+  settings = get_experiment_settings(new_exp_diff_df)
+
   if (ncombos == 1) {
     p = gen_lone_hist(pair_combo, boot_df, figure_titles)
+
+    # Generate the meaningful save name
+    figure_name = paste(plot_base, '_', settings[1], '_vs_', settings[2],
+                        '.pdf', sep='')
   } else {
     p = gen_combo_hist(pair_combo, boot_df, update_df, figure_titles)
+
+    # Generate a save name with the other factor
+    figure_name = paste(plot_base, '_', settings[1], '_vs_', settings[2],
+                        '_plus_', update_df$other_col_name[1], '.pdf', sep='')
   }
 
   # Save the plot to disk
   pair_id = paste(pair_combo, collapse="")
-  filepath = file.path(savepath, "figures", paste(pair_id, ".pdf", sep=""))
-  ggplot2::ggsave(filepath, plot=p, scale=0.8, height=(4 * ncombos), width=12)
+  filepath = file.path(savepath, "figures", figure_name)
+  ggplot2::ggsave(filepath, plot=p, scale=0.6, height=(4 * ncombos), width=12)
 }
 
 #' Generates all of the bootstrap histograms

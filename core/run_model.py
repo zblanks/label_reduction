@@ -149,13 +149,22 @@ def train_hc(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
     Searches over every label grouping and gets the best HC
     """
 
+    # If we're doing community detection then we only have one inferred
+    # community; otherwise we have to use the clustering-based approach
+    if args['group_algo'] == 'comm':
+        n = 1
+    else:
+        n = len(args['k_vals'])
+
     # First get the label groupings for each of the provided k_vals for
-    n = len(args["k_vals"])
     k_res = [dict()] * n
     nlabels = len(np.unique(y_train))
     label_groups = np.empty(shape=(n, nlabels), dtype=np.int32)
     for i in range(n):
-        print("Searching over k = {}".format(args["k_vals"][i]))
+        if args['group_algo'] == 'comm':
+            print('Inferring communities and fitting HC')
+        else:
+            print("Searching over k = {}".format(args["k_vals"][i]))
 
         # Infer the label groups
         start_time = time()
@@ -232,7 +241,7 @@ def prep_data(datapath: str, savepath: str, rng: np.random.RandomState,
             "y_val": y_val, "X_test": X_test}
 
 
-def fit_fc(data_dict: dict, rng: np.random.RandomState, args: dict, ids: list):
+def fit_fc(data_dict: dict, rng: np.random.RandomState, args: dict):
     """
     Fits and gets the out-of-sample predictions for a FC
     """
@@ -240,21 +249,22 @@ def fit_fc(data_dict: dict, rng: np.random.RandomState, args: dict, ids: list):
     # Train/predict the FC
     X_train = data_dict["X_train"]
     y_train = data_dict["y_train"]
-    X_val = data_dict["X_val"]
-    y_val = data_dict["y_val"]
     X_test = data_dict["X_test"]
-    res = flat_model(X_train, y_train, X_val, y_val, X_test, rng,
-                     args["estimator"], args["niter"])
+    res = flat_model(X_train, y_train, X_test, rng, args["estimator"],
+                     args["niter"])
+
+    # Generate the run ID
+    run_id = gen_id(args)
 
     # Prepare the results DataFrame
-    fc_df = pd.DataFrame({"id": ids, "metric": ["train_time"],
+    fc_df = pd.DataFrame({"id": run_id, "metric": ["train_time"],
                           "value": [res["train_time"]]})
 
     # Return the preliminary results DataFrame and the out-of-sample pred
-    return {"proba_pred": res["proba_pred"], "fc_df": fc_df}
+    return {"proba_pred": res["proba_pred"], "fc_df": fc_df, 'ids': run_id}
 
 
-def fit_hc(data_dict: dict, rng: np.random.RandomState, args: dict, ids: list):
+def fit_hc(data_dict: dict, rng: np.random.RandomState, args: dict):
     """
     Fits an HC, gets the test predictions, and generates results DataFrames
     """
@@ -272,15 +282,24 @@ def fit_hc(data_dict: dict, rng: np.random.RandomState, args: dict, ids: list):
     res = hc_pred(k_res['final_model'], X_test,
                   k_res['label_groups'][best_model, :])
 
+    # If we're working with the community detection algorithm, we need
+    # to add information about how many groups were inferred (the dict will
+    # be updated so no need to pass it as a result)
+    if args['group_algo'] == 'comm':
+        args['k_vals'] = [len(np.unique(k_res['label_groups'][0, :]))]
+
+    # Generate the run ID(s)
+    ids = gen_id(args)
+
     # Build the group and validation search DataFrames
     group_df = build_group_df(ids, k_res['label_groups'])
     search_df = build_search_df(ids, k_res['all_models'])
 
     return {"res": res, "group_df": group_df, "search_df": search_df,
-            "best_model": best_model}
+            "best_model": best_model, 'ids': ids}
 
 
-def save_fc_res(fc_res: dict, wd: str, exp_id: str):
+def save_fc_res(fc_res: dict, wd: str):
     """
     Saves the results from the FC to disk
     """
@@ -288,9 +307,10 @@ def save_fc_res(fc_res: dict, wd: str, exp_id: str):
     # Get the final elements from the FC model
     proba_pred = fc_res["proba_pred"]
     fc_df = fc_res["fc_df"]
+    run_id = fc_res['ids']
 
     # Save the probability prediction to disk
-    file = "f_" + exp_id + ".npy"
+    file = "f_" + run_id[0] + ".npy"
     savepath = os.path.join(wd, "proba_pred", file)
     np.save(savepath, proba_pred)
 
@@ -304,7 +324,7 @@ def save_fc_res(fc_res: dict, wd: str, exp_id: str):
     return None
 
 
-def save_hc_res(hci_res: dict, wd: str, ids: list):
+def save_hc_res(hci_res: dict, wd: str):
     """
     Saves the results from the HC to disk
     """
@@ -312,6 +332,7 @@ def save_hc_res(hci_res: dict, wd: str, ids: list):
     # Save the validation and grouping results to disk
     search_df = hci_res["search_df"]
     group_df = hci_res["group_df"]
+    ids = hci_res['ids']
 
     search_path = os.path.join(wd, "search_res.csv")
     group_path = os.path.join(wd, "group_res.csv")
@@ -379,21 +400,18 @@ def run_model(args: dict, datapath: str):
     else:
         data_dict = prep_data(datapath, savepath, rng)
 
-    # Second we need to generate a set of identifying IDs for the experiments
-    ids = gen_id(args)
-
-    # Third we need to fit the model given the appropriate method
+    # Next we need to fit the model given the appropriate method
     if args["method"] == "f":
-        fc_res = fit_fc(data_dict, rng, args, ids)
-        save_fc_res(fc_res, wd, ids[0])
+        res = fit_fc(data_dict, rng, args)
+        save_fc_res(res, wd)
 
     elif args["method"] == "hci":
-        hci_res = fit_hc(data_dict, rng, args, ids)
-        save_hc_res(hci_res, wd, ids)
+        res = fit_hc(data_dict, rng, args)
+        save_hc_res(res, wd)
 
     # Finally we need to record the various experimental settings for
     # further analysis at a later time
-    exp_df = create_experiment_df(args, ids)
+    exp_df = create_experiment_df(args, res['ids'])
     exp_path = os.path.join(wd, "experiment_settings.csv")
     if os.path.exists(exp_path):
         exp_df.to_csv(exp_path, mode="a", header=False, index=False)
