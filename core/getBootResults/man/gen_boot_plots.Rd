@@ -2,16 +2,18 @@
 % Please edit documentation in R/gen_bootstrap_plots.R
 \name{gen_boot_plots}
 \alias{gen_boot_plots}
-\title{Generates all of the bootstrap histograms}
+\title{Generates all of the bootstrap distributions}
 \usage{
-gen_boot_plots(wd)
+gen_boot_plots(wd, max_combo_size = 2)
 }
 \arguments{
 \item{wd}{Directory containing the files needed to generate the plots}
+
+\item{max_combo_size}{Max combination size for experiment combos}
 }
 \value{
 Nothing; saves the plots to disk
 }
 \description{
-Generates all of the bootstrap histograms
+Generates all of the bootstrap distributions
 }

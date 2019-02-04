@@ -18,4 +18,5 @@ Imports:
 	knitr,
 	readr,
 	rlang,
-	ggplot2
+	ggplot2,
+	R.devices

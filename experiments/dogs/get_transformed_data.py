@@ -5,8 +5,6 @@ import os
 import pandas as pd
 from joblib import Parallel, delayed
 from glob import glob
-from sklearn.decomposition import PCA
-import h5py
 
 
 def get_label(label_df: pd.DataFrame, file: str):
@@ -38,6 +36,7 @@ def main():
                         default="/pool001/zblanks/label_reduction_data/dogs")
     parser.add_argument('--model', type=str, nargs='?', default='nasnet')
     parser.add_argument("--ngpus", type=int, nargs="?", default=2)
+    parser.add_argument("--batch_size", type=int, nargs='?', default=32)
     args = vars(parser.parse_args())
 
     # Get the file and the label vector
@@ -53,20 +52,10 @@ def main():
     width = 500
     img_shape = (height, width, 3)
     transformer = TransformData(datapath, savepath, model_name=args['model'],
-                                ngpu=args['ngpus'], img_shape=img_shape)
+                                ngpu=args['ngpus'], img_shape=img_shape,
+                                batch_size=args['batch_size'])
 
     transformer.transform(y=y)
-
-    # Since the NASNetLarge model yields 4000 features, I want to reduce the
-    # dimensionality to start with so that we don't have to spend so much
-    # time computing the PCA each time
-    f = h5py.File(savepath, 'r+')
-    X = np.array(f['X'])
-    del f['X']
-    pca = PCA(n_components=300, random_state=17)
-    X = pca.fit_transform(X)
-    f.create_dataset('X', data=X)
-    f.close()
 
 
 if __name__ == '__main__':

@@ -10,6 +10,23 @@ from sklearn.utils import resample
 from joblib import Parallel, delayed
 
 
+def check_one_difference(df: pd.DataFrame):
+    """
+    Checks if a DataFrame has only one difference between the experiment
+    settings with some exceptions
+    """
+
+    # If one of the methods is "f" in which case we need to ignore the
+    # the group_algo because we gave an arbitrary value
+    if 'f' in df.method.values:
+        # Drop the group_algo column because it's not relevant
+        df = df.drop(labels=['group_algo'], axis=1)
+
+    # Check if there is only one difference between the experiment settings
+    row_diffs = df.nunique()
+    return len(np.where(row_diffs.values > 1)[0]) == 1
+
+
 def find_exp_pairs(df: pd.DataFrame, exp_vars: list,
                    consider_cols: np.ndarray):
     """
@@ -30,9 +47,8 @@ def find_exp_pairs(df: pd.DataFrame, exp_vars: list,
         sub_df = df.iloc[list(combo), :]
         sub_df = sub_df.loc[:, consider_cols].reset_index(drop=True)
 
-        # First calculate the number of differences between the rows
-        row_diffs = sub_df.nunique()
-        only_one_diff = len(np.where(row_diffs.values > 1)[0]) == 1
+        # Check if there is only one difference with an exception for "f"
+        only_one_diff = check_one_difference(sub_df)
 
         # Check if methods are different
         diff_methods = sub_df.loc[0, "method"] != sub_df.loc[1, "method"]
@@ -359,7 +375,8 @@ def format_res_df(nfiles: int, ids: list):
     Formats the results DataFrame in the expected format for later analysis
     """
     # metrics = ['leaf_auc', 'leaf_top1', 'leaf_top3', 'node_auc', 'node_top1']
-    metrics = ['leaf_top1', 'leaf_top3', 'node_top1']
+    # metrics = ['leaf_top1', 'leaf_top3', 'node_top1']
+    metrics = ['leaf_top1', 'leaf_top3']
     nmetrics = len(metrics)
     metrics_vect = np.tile(metrics, nfiles)
     ids_vect = np.repeat(ids, nmetrics)
@@ -384,11 +401,13 @@ def flat_parallel(file: str, id_val: str, y_true: np.ndarray,
 
     # Compute the node metrics
     y_node = remap_target(y_true, label_map)
-    n_top1 = node_top1(y_node, proba_pred, label_map)
+    # n_top1 = node_top1(y_node, proba_pred, label_map)
 
     # Return the DataFrame result
-    res = [leaf_top1, leaf_top3, n_top1]
-    metrics = ['leaf_top1', 'leaf_top3', 'node_top1']
+    # res = [leaf_top1, leaf_top3, n_top1]
+    res = [leaf_top1, leaf_top3]
+    # metrics = ['leaf_top1', 'leaf_top3', 'node_top1']
+    metrics = ['leaf_top1', 'leaf_top3']
 
     return pd.DataFrame({"id": id_val, "metric": metrics, "value": res})
 
@@ -428,11 +447,13 @@ def hc_parallel(leaf_file: str, node_file: str, id_val: str, y_true: np.ndarray,
 
     # Compute the node metrics
     y_node = remap_target(y_true, label_map)
-    n_top1 = top_k_accuracy(y_node, node_proba_pred, k=1)
+    # n_top1 = top_k_accuracy(y_node, node_proba_pred, k=1)
 
     # Format the results
-    res = [leaf_top1, leaf_top3, n_top1]
-    metrics = ["leaf_top1", "leaf_top3", "node_top1"]
+    # res = [leaf_top1, leaf_top3, n_top1]
+    res = [leaf_top1, leaf_top3]
+    # metrics = ["leaf_top1", "leaf_top3", "node_top1"]
+    metrics = ['leaf_top1', 'leaf_top3']
     return pd.DataFrame({"id": id_val, "metric": metrics, "value": res})
 
 
@@ -565,6 +586,28 @@ def get_all_boot_distns(first_df: pd.DataFrame, second_df: pd.DataFrame,
     return boot_df, pair_df
 
 
+def get_raw_results(res0_df: pd.DataFrame, res1_df: pd.DataFrame):
+    """
+    Gets the raw results (versus percent difference)
+    """
+
+    # Grab the first id from the 0th and 1st DataFrames so that we know
+    # what their experiment settings were
+    id0 = res0_df.loc[0, 'id']
+    id1 = res1_df.loc[0, 'id']
+
+    # Compute the raw results by each metric for both DataFrames
+    groupby_res0 = res0_df.groupby(by='metric', as_index=False).mean()
+    groupby_res1 = res1_df.groupby(by='metric', as_index=False).mean()
+
+    # Add the ID and then get one final results DataFrame
+    groupby_res0['id'] = id0
+    groupby_res1['id'] = id1
+    df = pd.concat([groupby_res0, groupby_res1], ignore_index=True)
+    df = df.reset_index(drop=True)
+    return df
+
+
 def compute_metrics(exp_pair: dict, prob_files: dict, group_df: pd.DataFrame,
                     exp_df: pd.DataFrame, y_true: np.ndarray,
                     bootstrap_samples: int, proba_path: str):
@@ -605,6 +648,9 @@ def compute_metrics(exp_pair: dict, prob_files: dict, group_df: pd.DataFrame,
         hc_res = compute_hc_metrics(hc_leaf, hc_node, method1_ids, y_true,
                                     label_maps, idx_files)
 
+        # Get the raw results
+        raw_df = get_raw_results(f_res, hc_res)
+
         # Get the final bootstrap results for each metric and the DataFrame
         # mapping the experiment pair
         boot_df, pair_df = get_all_boot_distns(
@@ -623,6 +669,9 @@ def compute_metrics(exp_pair: dict, prob_files: dict, group_df: pd.DataFrame,
         f_res = compute_flat_metrics(f_all, method1_files, y_true, label_maps)
         hc_res = compute_hc_metrics(hc_leaf, hc_node, method0_ids, y_true,
                                     label_maps, idx_files)
+
+        # Get the raw results
+        raw_df = get_raw_results(f_res, hc_res)
 
         # Get the final bootstrap results
         boot_df, pair_df = get_all_boot_distns(
@@ -651,13 +700,41 @@ def compute_metrics(exp_pair: dict, prob_files: dict, group_df: pd.DataFrame,
                                          method1_ids, y_true, label_maps,
                                          idx1_files)
 
+        # Get the raw results
+        raw_df = get_raw_results(method0_res, method1_res)
+
         # Get the final bootstrap results
         boot_df, pair_df = get_all_boot_distns(
             method0_res, method1_res, bootstrap_samples, method0_ids[0],
             method1_ids[0]
         )
 
-    return boot_df, pair_df
+    return boot_df, pair_df, raw_df
+
+
+def fix_raw_results(raw_df: pd.DataFrame):
+    """
+    Fixes some issues with the raw results
+    """
+
+    # There's some redundancy with the raw results so we'll remove duplicated
+    # results
+    raw_df = raw_df[~raw_df.duplicated()]
+
+    # There might also be some differences between run numbers between
+    # experiments
+    uniq_ids = raw_df.id.unique()
+    n = len(uniq_ids)
+    id_dfs = [pd.DataFrame()] * n
+    for (i, id_val) in enumerate(uniq_ids):
+        tmp_df = raw_df[raw_df['id'] == id_val].groupby('metric',
+                                                        as_index=False).mean()
+        tmp_df['id'] = id_val
+        id_dfs[i] = tmp_df
+
+    df = pd.concat(id_dfs, ignore_index=True)
+    df = df.reset_index(drop=True)
+    return df
 
 
 def compare_experiments(exp_path: str, group_path: str, proba_path: str,
@@ -677,6 +754,12 @@ def compare_experiments(exp_path: str, group_path: str, proba_path: str,
     exp_df = pd.read_csv(exp_path)
     group_df = pd.read_csv(group_path)
 
+    # In the event that we have run the same experiment (i.e. maybe we updated
+    # the algorithm) we need to check for duplicates with respect to the ID
+    # and then remove the duplicates
+    exp_df = exp_df[~exp_df.duplicated(subset=['id'], keep='last')]
+    exp_df.to_csv(exp_path, index=False)
+
     # Using the experiment settings DataFrame, we need to infer all of the
     # unique experiments that occurred
     exp_pairs = infer_uniq_experiments(exp_df, exp_vars)
@@ -687,8 +770,9 @@ def compare_experiments(exp_path: str, group_path: str, proba_path: str,
     n = len(exp_pairs)
     boot_dfs = [pd.DataFrame()] * n
     pair_dfs = [pd.DataFrame()] * n
+    raw_dfs = [pd.DataFrame()] * n
     for (i, exp_pair) in enumerate(exp_pairs):
-        boot_dfs[i], pair_dfs[i] = compute_metrics(
+        boot_dfs[i], pair_dfs[i], raw_dfs[i] = compute_metrics(
             exp_pair, prob_files, group_df, exp_df, y_true, bootstrap_samples,
             proba_path
         )
@@ -697,4 +781,9 @@ def compare_experiments(exp_path: str, group_path: str, proba_path: str,
     # analysis
     boot_df = pd.concat(boot_dfs, ignore_index=True)
     pair_df = pd.concat(pair_dfs, ignore_index=True)
-    return boot_df, pair_df
+    raw_df = pd.concat(raw_dfs, ignore_index=True)
+
+    # There's some redundancy with the raw results so we'll remove duplicated
+    # results
+    raw_df = fix_raw_results(raw_df)
+    return boot_df, pair_df, raw_df

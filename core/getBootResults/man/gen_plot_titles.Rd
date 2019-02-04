@@ -11,7 +11,7 @@ gen_plot_titles(exp_diff_df)
 \item{exp_diff_df}{Experiment difference DataFrame}
 }
 \value{
-List containing the plot and caption title
+Plot title
 }
 \description{
 Helper function to generate the plot and caption title based off the

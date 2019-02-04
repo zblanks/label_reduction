@@ -1,4 +1,4 @@
-from core.hc import flat_model, hierarchical_model, hc_pred
+from core.hc import flat_model, hierarchical_model, hc_pred, spectral_model
 from core.group_labels import group_labels
 import hashlib
 import pandas as pd
@@ -176,11 +176,52 @@ def train_hc(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
         # space
         k_res[i] = hierarchical_model(
             X_train, y_train, X_val, y_val, label_groups[i, :], rng,
-            args["estimator"], args["niter"]
+            args["estimator"]
         )
 
         # Add the cluster time
         k_res[i]["cluster_time"] = cluster_time
+
+    # Get the best model
+    best_model = np.array([k_res[i]["acc"] for i in range(n)]).argmax()
+
+    # Return all of the models so we can get validation results and the
+    # best model so we can evaluate it out-of-sample
+    return {"all_models": k_res, "final_model": k_res[best_model]["models"],
+            "label_groups": label_groups, "best_model": best_model}
+
+
+def train_spectral(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
+                   y_val: np.ndarray, args: dict, rng: np.random.RandomState):
+    """
+    Trains the spectral model across all values of k
+    """
+
+    # First get the label groupings for each of the provided k_vals for
+    n = len(args['k_vals'])
+    k_res = [dict()] * n
+    nlabels = len(np.unique(y_train))
+    label_groups = np.empty(shape=(n, nlabels), dtype=np.int32)
+    A = np.empty(shape=(nlabels, nlabels))
+    for i in range(n):
+        print('Searching over k = {}'.format(args['k_vals'][i]))
+
+        # For the first run we need to compute the flat model and generate
+        # the affinity matrix for spectral clustering; for the remaining
+        # runs we'll just use the affinity matrix we computed
+        if i == 0:
+            k_res[i], A, tmp_groups = spectral_model(
+                X_train, y_train, X_val, y_val, args['k_vals'][i], rng,
+                args['estimator'],
+            )
+        else:
+            k_res[i], tmp_groups = spectral_model(
+                X_train, y_train, X_val, y_val, args['k_vals'][i], rng,
+                args['estimator'], affinity_mat=A
+            )
+
+        # Add the label groups to the matrix
+        label_groups[i, :] = tmp_groups
 
     # Get the best model
     best_model = np.array([k_res[i]["acc"] for i in range(n)]).argmax()
@@ -201,7 +242,7 @@ def prep_data(datapath: str, savepath: str, rng: np.random.RandomState,
     # Load the data from disk
     f = h5py.File(datapath, "r")
     X = np.array(f["X"])
-    y = np.array(f["y"])
+    y = np.array(f["y"]).flatten()
     f.close()
 
     # If we need to, we will down-sample the data proportional to y so
@@ -250,8 +291,9 @@ def fit_fc(data_dict: dict, rng: np.random.RandomState, args: dict):
     X_train = data_dict["X_train"]
     y_train = data_dict["y_train"]
     X_test = data_dict["X_test"]
-    res = flat_model(X_train, y_train, X_test, rng, args["estimator"],
-                     args["niter"])
+    res = flat_model(X_train, y_train, X_test, rng, args['estimator'])
+    # res = flat_model(X_train, y_train, X_test, rng, args["estimator"],
+    #                  args["niter"])
 
     # Generate the run ID
     run_id = gen_id(args)
@@ -264,20 +306,12 @@ def fit_fc(data_dict: dict, rng: np.random.RandomState, args: dict):
     return {"proba_pred": res["proba_pred"], "fc_df": fc_df, 'ids': run_id}
 
 
-def fit_hc(data_dict: dict, rng: np.random.RandomState, args: dict):
+def get_hc_res(k_res: dict, X_test: np.ndarray, args: dict):
     """
-    Fits an HC, gets the test predictions, and generates results DataFrames
+    Generates the test results and DataFrames for a hierarchical classifier
     """
 
-    # First determine the best model across all meta-class groups
-    X_train = data_dict["X_train"]
-    y_train = data_dict["y_train"]
-    X_val = data_dict['X_val']
-    y_val = data_dict['y_val']
-    X_test = data_dict['X_test']
-    k_res = train_hc(X_train, y_train, X_val, y_val, args, rng)
-
-    # Using the best model get the test predictions
+    # Get the best model
     best_model = k_res['best_model']
     res = hc_pred(k_res['final_model'], X_test,
                   k_res['label_groups'][best_model, :])
@@ -297,6 +331,40 @@ def fit_hc(data_dict: dict, rng: np.random.RandomState, args: dict):
 
     return {"res": res, "group_df": group_df, "search_df": search_df,
             "best_model": best_model, 'ids': ids}
+
+
+def fit_hc(data_dict: dict, rng: np.random.RandomState, args: dict):
+    """
+    Fits an HC, gets the test predictions, and generates results DataFrames
+    """
+
+    # First determine the best model across all meta-class groups
+    X_train = data_dict["X_train"]
+    y_train = data_dict["y_train"]
+    X_val = data_dict['X_val']
+    y_val = data_dict['y_val']
+    X_test = data_dict['X_test']
+    k_res = train_hc(X_train, y_train, X_val, y_val, args, rng)
+
+    # Get the results from the experiments
+    return get_hc_res(k_res, X_test, args)
+
+
+def fit_spectral(data_dict: dict, rng: np.random.RandomState, args: dict):
+    """
+    Fits the spectral clustering based benchmark and generates the DataFrames
+    """
+
+    # Determine the best model across all meta-class groups
+    X_train = data_dict["X_train"]
+    y_train = data_dict["y_train"]
+    X_val = data_dict['X_val']
+    y_val = data_dict['y_val']
+    X_test = data_dict['X_test']
+    k_res = train_spectral(X_train, y_train, X_val, y_val, args, rng)
+
+    # Get the test results from the spectral HC
+    return get_hc_res(k_res, X_test, args)
 
 
 def save_fc_res(fc_res: dict, wd: str):
@@ -400,13 +468,23 @@ def run_model(args: dict, datapath: str):
     else:
         data_dict = prep_data(datapath, savepath, rng)
 
+    # Create the proba_pred directory if it does not already exist
+    if not os.path.exists(os.path.join(args['wd'], 'proba_pred')):
+        os.mkdir(os.path.join(args['wd'], 'proba_pred'))
+
     # Next we need to fit the model given the appropriate method
     if args["method"] == "f":
         res = fit_fc(data_dict, rng, args)
         save_fc_res(res, wd)
 
-    elif args["method"] == "hci":
-        res = fit_hc(data_dict, rng, args)
+    else:
+        if args['group_algo'] in ['kmm', 'lp', 'comm']:
+            res = fit_hc(data_dict, rng, args)
+        elif args['group_algo'] == 'spectral':
+            res = fit_spectral(data_dict, rng, args)
+        else:
+            res = {}
+
         save_hc_res(res, wd)
 
     # Finally we need to record the various experimental settings for

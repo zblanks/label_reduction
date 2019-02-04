@@ -3,8 +3,6 @@ import argparse
 from keras.datasets import cifar100
 import numpy as np
 from os import path
-from sklearn.decomposition import PCA
-import h5py
 
 
 def main():
@@ -33,21 +31,6 @@ def main():
                                 ngpu=args['ngpus'])
 
     transformer.transform(X=X, y=y)
-
-    # Since the NASNetLarge model yields 4000 features, I want to reduce the
-    # dimensionality to start with so that we don't have to spend so much
-    # time computing the PCA each time
-    f = h5py.File(savepath, 'r+')
-    X = np.array(f['X'])
-    y = np.array(f['y'])
-    del f['X']
-    del f['y']
-    y = y.flatten()
-    pca = PCA(n_components=300, random_state=17)
-    X = pca.fit_transform(X)
-    f.create_dataset('X', data=X)
-    f.create_dataset('y', data=y)
-    f.close()
 
 
 if __name__ == '__main__':

@@ -1,32 +1,28 @@
 from sklearn.linear_model import SGDClassifier
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split, GridSearchCV, ShuffleSplit
 from sklearn.metrics import confusion_matrix, accuracy_score, roc_auc_score
-from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.cluster import SpectralClustering
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.pipeline import Pipeline
 import numpy as np
 from time import time
-from multiprocessing import Pool
-from itertools import repeat
 
 
-def train_node(X: np.ndarray, y: np.ndarray, niter: int,
-               rng: np.random.RandomState, estimator: str,
-               method: str) -> dict:
+def train_node(X: np.ndarray, y: np.ndarray, rng: np.random.RandomState,
+               estimator: str):
     """
     Trains a given node for any type of classifier
     """
 
-    # Extract features for the model using PCA
-    if method == "f" or method == "hci":
-        scaler = StandardScaler()
-        X = scaler.fit_transform(X)
-        pca = PCA(n_components=50, random_state=rng)
-        X = pca.fit_transform(X)
-    else: # the paper did not say to take these actions therefore we will not
-        pca = ""
-        scaler = ""
+    # Get the number of unique labels in the target vector to do
+    # supervised dimensionality reduction
+    nlabels = len(np.unique(y))
+
+    # Define a scaler object to ensure the data has zero mean and a variance
+    # of one
+    scaler = StandardScaler()
 
     # Define the estimator provided to the function
     if estimator == "log":
@@ -34,29 +30,25 @@ def train_node(X: np.ndarray, y: np.ndarray, niter: int,
                               class_weight="balanced", warm_start=True,
                               max_iter=1000, tol=1e-3)
 
-        # Generate regularization values
-        alpha_vals = 10 ** rng.uniform(-5, 5, niter)
-
-        # Define the search grid
-        param_grid = {'alpha': alpha_vals}
+    elif estimator == 'knn':
+        model = KNeighborsClassifier(n_jobs=-1)
 
     else:
-        model = RandomForestClassifier(random_state=rng,
-                                       class_weight="balanced")
+        model = RandomForestClassifier(random_state=rng, n_estimators=100,
+                                       class_weight="balanced", n_jobs=-1)
 
-        # Generate forest sizes
-        ntrees = rng.randint(50, 150, size=niter)
-
-        # Define the search grid object
-        param_grid = {"n_estimators": ntrees}
-
-    # Define a train-validation split object for the GridSearch
-    rs = ShuffleSplit(n_splits=1, test_size=.20, random_state=rng)
+    # Combine all of the elements to create a sklean pipeline to simplify
+    # the process of training a particular model
+    if nlabels < X.shape[1]:
+        lda = LinearDiscriminantAnalysis(n_components=(nlabels - 1))
+        steps = [('scaler', scaler), ('lda', lda), ('model', model)]
+    else:
+        steps = [('scaler', scaler), ('model', model)]
 
     # Fit the model
-    clf = GridSearchCV(model, param_grid, n_jobs=-1, refit=True, cv=rs)
-    clf.fit(X, y)
-    return {'clf': clf, 'pca': pca, 'scaler': scaler}
+    pipe = Pipeline(steps)
+    pipe.fit(X, y)
+    return pipe
 
 
 def remap_labels(y: np.ndarray, label_groups: np.ndarray) -> np.ndarray:
@@ -72,23 +64,18 @@ def remap_labels(y: np.ndarray, label_groups: np.ndarray) -> np.ndarray:
 
 
 def flat_model(X_train: np.ndarray, y_train: np.ndarray, X_test: np.ndarray,
-               rng: np.random.RandomState, estimator: str, niter=10) -> dict:
+               rng: np.random.RandomState, estimator: str) -> dict:
     """
     Trains the FC and gets the out of sample predictions
     """
 
     # Train the model
     start_time = time()
-    models = train_node(X_train, y_train, niter, rng, estimator=estimator,
-                        method='f')
+    clf = train_node(X_train, y_train, rng, estimator)
     train_time = time() - start_time
 
-    # Test the model
-    pca = models["pca"]
-    scaler = models["scaler"]
-    clf = models["clf"]
-    test_X = pca.transform(scaler.transform(X_test))
-    proba_pred = clf.predict_proba(test_X)
+    # Get the test set predictions
+    proba_pred = clf.predict_proba(X_test)
 
     return {"train_time": train_time, "proba_pred": proba_pred}
 
@@ -119,31 +106,25 @@ def hc_pred(models: list, X_test: np.ndarray, label_groups: np.ndarray) -> dict:
     leaf_idx = np.where(np.bincount(label_groups) > 1)[0]
     nmodels = len(models)
 
-    # Grab the object of interest
-    clfs = [models[i]["clf"] for i in range(nmodels)]
-    pcas = [models[i]["pca"] for i in range(nmodels)]
-    scalers = [models[i]["scaler"] for i in range(nmodels)]
-
-    # Put a placeholder for the predictions
-    n = X_test.shape[0]
+    # Grab the sklearn pipelines
+    clfs = [models[i] for i in range(nmodels)]
 
     # Get the probability predictions from the HC root
-    test_X = pcas[-1].transform(scalers[-1].transform(X_test))
-    root_proba_pred = clfs[-1].predict_proba(test_X)
+    root_proba_pred = clfs[-1].predict_proba(X_test)
     lone_leaves = np.setdiff1d(np.arange(ngroups), leaf_idx)
     label_groups = [np.where(label_groups == i)[0] for i in range(ngroups)]
     root_map = dict(zip(range(ngroups), label_groups))
 
     # Define a place holder for each of the probability predictions from
     # the HC nodes
+    n = X_test.shape[0]
     node_proba_preds = [np.zeros(shape=(n, len(root_map[idx])))
                         for idx in leaf_idx]
 
     # For all of the non-lone leaves, we will compute their posterior and
     # update the probabilities in the node matrices
     for (i, val) in enumerate(leaf_idx):
-        test_X = pcas[i].transform(scalers[i].transform(X_test))
-        tmp_pred = clfs[i].predict_proba(test_X)
+        tmp_pred = clfs[i].predict_proba(X_test)
 
         # Adjust the probability values for the appropriate labels
         # in the correct node probability matrix
@@ -176,7 +157,7 @@ def hierarchical_model(X_train: np.ndarray, y_train: np.ndarray,
                        X_val: np.ndarray, y_val: np.ndarray,
                        label_groups: np.ndarray,
                        rng: np.random.RandomState,
-                       estimator: str, niter=10) -> dict:
+                       estimator: str) -> dict:
     """
     Trains the HC and gets the out of sample predictions
     """
@@ -199,20 +180,10 @@ def hierarchical_model(X_train: np.ndarray, y_train: np.ndarray,
 
     # Train each of the nodes
     start_time = time()
-
-    # niter_rep = repeat(niter)
-    # rng_rep = repeat(rng)
-    # estimator_rep = repeat(estimator)
-    # method_rep = repeat("hci")
-    # with Pool() as p:
-    #     models = p.starmap(train_node, zip(X_list, y_list, niter_rep, rng_rep,
-    #                                        estimator_rep, method_rep))
-
     nmodels = len(idx_list) + 1
-    models = [dict()] * nmodels
+    models = []
     for i in range(nmodels):
-        models[i] = train_node(X_list[i], y_list[i], niter, rng, estimator,
-                               method='hci')
+        models.append(train_node(X_list[i], y_list[i], rng, estimator))
 
     train_time = time() - start_time
 
@@ -231,129 +202,46 @@ def hierarchical_model(X_train: np.ndarray, y_train: np.ndarray,
     return {"train_time": train_time, "models": models, "acc": acc, "auc": auc}
 
 
-def spectral_model(X_train: np.ndarray, y_train: np.ndarray,
-                   X_test: np.ndarray, L: int, rng: np.random.RandomState,
-                   estimator: str, niter=10) -> dict:
+def spectral_model(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
+                   y_val: np.ndarray, k: int, rng: np.random.RandomState,
+                   estimator: str, **kwargs):
     """
     Trains the hierarchical classifier using the spectral clustering
     approach to finding Z
     """
-    # Train the initial model
+    # Train the initial model (if we not already called the spectral function)
+    if 'affinity_mat' not in kwargs.keys():
+        start_time = time()
+        init_clf = train_node(X_train, y_train, rng, estimator)
+        init_train_time = time() - start_time
+
+        # Get the confusion matrix to use for spectral clustering
+        cmat = confusion_matrix(y_val, init_clf.predict(X_val))
+        A = .5 * (cmat * cmat.T)
+        affinity_mat = np.copy(A)
+    else:
+        # Use the existing confusion matrix to perform spectral clustering
+        init_train_time = 0.
+        A = kwargs['affinity_mat']
+        affinity_mat = np.copy(A)
+
+    # Perform spectral clustering on the affinity matrix
     start_time = time()
-    init_clf = train_node(X_train, y_train, niter, rng, estimator=estimator,
-                          method="f")
-    init_train_time = time() - start_time
-
-    # Compute the validation confusion matrix
-    train_X, val_X, train_y, val_y = train_test_split(
-        X_train, y_train, test_size=0.25, random_state=rng
-    )
-    val_X = init_clf["pca"].transform(val_X)
-    cmat = confusion_matrix(val_y, init_clf["clf"].predict(val_X))
-
-    # Prepare the confusion matrix to be used in spectral clustering
-    a = 1/2 * (cmat + cmat.T)
-    sc = SpectralClustering(n_clusters=L, random_state=rng,
+    sc = SpectralClustering(n_clusters=k, random_state=rng,
                             affinity="precomputed")
-    label_pred = sc.fit_predict(a)
-
-    # Gather the label groups
-    label_groups = [np.where(label_pred == i)[0] for i in range(L)]
+    label_groups = sc.fit_predict(affinity_mat)
+    cluster_time = time() - start_time
 
     # Feed the label groups into the standard way of training the HC
-    res = hierarchical_model(X_train, y_train, X_test, label_groups, rng,
-                             estimator=estimator, niter=niter)
+    res = hierarchical_model(X_train, y_train, X_val, y_val, label_groups,
+                             rng, estimator)
 
     # Update the training time of the HC to include the time we spent training
     # the initial classifier
-    res["train_time"] += init_train_time
-    return res
+    res['train_time'] += init_train_time
+    res['cluster_time'] = cluster_time
 
-
-def db2_model(X_train: np.ndarray, y_train: np.ndarray, X_test: np.ndarray,
-              tree_dict: dict, rng: np.random.RandomState, estimator: str,
-              niter=10) -> dict:
-    """
-    Implements the DB2 benchmark
-    """
-
-    # Scale and reduce the dimensionality of the data only for the starting
-    # data since they did not feed different features to each of the parent
-    # nodes in the DB2 tree
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X_train)
-    pca = PCA(n_components=50, random_state=rng)
-    X_train = pca.fit_transform(X_train)
-
-    # Get the indices for each of the parents in the DB2 tree
-    nkeys = len(tree_dict.keys())
-    idx = [np.empty(shape=(y_train.shape[0],), dtype=bool)] * nkeys
-    for (i, key) in enumerate(tree_dict.keys()):
-        labels = tree_dict[key][0] + tree_dict[key][1]
-        idx[i] = np.isin(y_train, labels)
-
-    # Re-map the labels and X matrices for each of the parents in the tree
-    X_list = [np.empty_like(X_train)] * nkeys
-    y_list = [np.empty_like(y_train)] * nkeys
-    for (i, key) in enumerate(tree_dict.keys()):
-        # Get the new X matrix
-        X_new = X_train[idx[i], :]
-        X_list[i] = X_new
-
-        # Re-map the labels
-        y_new = y_train[idx[i]]
-        y_new = remap_labels(y_new, tree_dict[key])
-        y_list[i] = y_new
-
-    # Train each of the parent nodes in parallel
-    start_time = time()
-    niter_rep = repeat(niter)
-    rng_rep = repeat(rng)
-    estimator_rep = repeat(estimator)
-    method_rep = repeat("db2")
-    with Pool() as p:
-        models = p.starmap(train_node, zip(X_list, y_list, niter_rep, rng_rep,
-                                           estimator_rep, method_rep))
-    train_time = time() - start_time
-
-    # Update the models object to have the key --> clf
-    clfs = [models[i]["clf"] for i in range(len(models))]
-    model_dict = dict(zip(tree_dict.keys(), clfs))
-
-    # Get the out-of-sample predictions
-    y_pred = np.empty(shape=(X_test.shape[0]), dtype=int)
-    idx = np.arange(X_test.shape[0])
-    label_group = str(np.unique(y_train).tolist())
-    y_pred = db2_pred(X_test, label_group, y_pred, tree_dict, model_dict, idx)
-
-    return {"train_time": train_time, "y_pred": y_pred}
-
-
-def db2_pred(X: np.ndarray, label_group: str, y_pred: np.ndarray,
-             tree_dict: dict, model_dict: dict, idx: np.ndarray) -> np.ndarray:
-    """
-    Gets the predictions for the DB2 benchmark
-    """
-
-    # Get the predictions for the given label group and data
-    pred = model_dict[str(label_group)].predict(X[idx, :])
-
-    # Since we are restricting ourselves to binary the resulting output
-    # will be {0, 1}
-    unique_pred = np.unique(pred)
-    for val in unique_pred:
-        pred_idx = idx[np.where(pred == val)]
-
-        # If we are at the case where the child of the given label_group
-        # parent is a singleton, we know we can make the final prediction
-        if len(tree_dict[label_group][val]) == 1:
-            # Update the final prediction values
-            y_pred[pred_idx] = tree_dict[label_group][val][0]
-        else:
-            # We are in a case where we are not dealing with a singleton
-            # and thus need to recurse down the DB2 tree
-            new_label_group = str(tree_dict[label_group][val])
-            y_pred = db2_pred(X[idx, :], new_label_group, y_pred,
-                              tree_dict, model_dict)
-
-    return y_pred
+    if 'affinity_mat' not in kwargs.keys():
+        return res, A, label_groups
+    else:
+        return res, label_groups

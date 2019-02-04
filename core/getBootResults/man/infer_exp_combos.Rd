@@ -4,7 +4,7 @@
 \alias{infer_exp_combos}
 \title{Infers if any of the experiments belong as a group for plotting purposes}
 \usage{
-infer_exp_combos(exp_diff_df, exp_df, pair_df)
+infer_exp_combos(exp_diff_df, exp_df, pair_df, max_combo_size)
 }
 \arguments{
 \item{exp_diff_df}{Experiment difference DataFrame}
@@ -12,6 +12,8 @@ infer_exp_combos(exp_diff_df, exp_df, pair_df)
 \item{exp_df}{DataFrame detailing all experiment settings}
 
 \item{pair_df}{DataFrame defining the experiment pairs}
+
+\item{max_combo_size}{Max combination size for experiment combos}
 }
 \value{
 List containing the pair_ids that belong togeter and a DataFrame

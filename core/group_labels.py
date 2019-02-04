@@ -1,5 +1,5 @@
 import numpy as np
-from core.coord_desc import run_coord_desc
+from core.label_group_milp import lp_heuristic
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 from sklearn.metrics.pairwise import rbf_kernel
@@ -94,11 +94,6 @@ def group_labels(X: np.ndarray, y: np.ndarray, k: int,
         label_groups = _community_detection(V)
 
     else:
-        # The coordinate descent algorithm requires the variances of each of
-        # the labels also be computed
-        uniq_labels = np.unique(y)
-        label_vars = np.array([_compute_var(X, y, i) for i in uniq_labels])
-
-        label_groups = run_coord_desc(V, label_vars, y, k, ninit)
+        label_groups = lp_heuristic(V, k)
 
     return label_groups

@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image
 import h5py
 from joblib import Parallel, delayed
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 
 
 class TransformData(object):
@@ -217,9 +218,22 @@ class TransformData(object):
             X = model.predict_generator(generator=img_gen, verbose=1,
                                         steps=steps)
 
+        # Do reduce computation time and assist with down-stream classification
+        # we will use LDA
+        y = file_dict['labels'].flatten()
+        nlabels = len(np.unique(y))
+
+        # If the number of features is less than the labels then we cannot
+        # perform LDA
+        if nlabels >= X.shape[1]:
+            X_new = np.copy(X)
+        else:
+            lda = LinearDiscriminantAnalysis(n_components=(nlabels - 1))
+            X_new = lda.fit_transform(X, y)
+
         # Put the data in the expected format
         f = h5py.File(self._save_path, "w")
-        f.create_dataset("X", data=X)
-        f.create_dataset('y', data=file_dict['labels'])
+        f.create_dataset("X", data=X_new)
+        f.create_dataset('y', data=y)
         f.close()
         return None

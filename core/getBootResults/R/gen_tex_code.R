@@ -108,10 +108,25 @@ get_exp_diff = function(pair_id, pair_df, exp_df) {
 
   # Using the exp_ids, get the unique experiment settings from the exp_df table
   uniq_settings = dplyr::filter(exp_df, .data$id %in% exp_ids)
+  uniq_settings = dplyr::mutate(
+    uniq_settings, method = ifelse(.data$method == 'hci',
+                                   paste(.data$method, .data$group_algo, sep='_'),
+                                   .data$method)
+  )
 
   # Finally using the uniq_settings, we need to infer which experiment setting
   # was different (and thus constitute what separates these experiments)
-  consider_cols = dplyr::setdiff(colnames(uniq_settings), c("id", "k"))
+  consider_cols = dplyr::setdiff(colnames(uniq_settings), c("id", "k",
+                                                            'run_num'))
+
+  # If either of the method is 'f' then we need to ignore the group_algo
+  # we gave it a filler value
+  if ("f" %in% uniq_settings$method) {
+    consider_cols = consider_cols[which(consider_cols != "group_algo")]
+  } else if (all(grep('hci', uniq_settings$method) == c(1, 2))) {
+    consider_cols = consider_cols[which(consider_cols != 'method')]
+  }
+
   nunique = purrr::map_int(.x=consider_cols,
                            .f=~nrow(dplyr::distinct_(uniq_settings, .dots=.x)))
 

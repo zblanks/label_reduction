@@ -49,7 +49,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("wd", type=str, nargs="?",
                         default="/pool001/zblanks/label_reduction_data/skin")
-    parser.add_argument('model', type=str, nargs='?', default='densenet')
+    parser.add_argument('--model', type=str, nargs='?', default='densenet')
+    parser.add_argument('--ngpus', type=int, nargs='?', default=2)
+    parser.add_argument('--batch_size', type=int, nargs='?', default=32)
     args = vars(parser.parse_args())
 
     # We know all of the images are (450 x 600 x 3), so we can hard-code this
@@ -68,7 +70,8 @@ def main():
     # Using the labels and the argument paths, transform the image data and
     # save it to disk
     transformer = TransformData(datapath, savepath, model_name=args['model'],
-                                img_shape=img_size)
+                                ngpu=args['ngpus'], img_shape=img_size,
+                                batch_size=args['batch_size'])
     transformer.transform(y=y)
 
 

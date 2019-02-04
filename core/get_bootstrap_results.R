@@ -4,8 +4,9 @@ library(getBootResults)
 # Get command line arguments for the directory where data is saved
 args = commandArgs(trailingOnly = T)
 
-# Execute the source code and generate TeX tables
-gen_tex_code(args[1])
-
-# Generate the plots for each of the experiments
-gen_boot_plots(args[1])
+# Generate the distributions for each of unique experiments
+if (length(args) == 2) {
+  gen_boot_plots(wd=args[1], max_combo_size=args[2])
+} else {
+  gen_boot_plots(wd=args[1])
+}

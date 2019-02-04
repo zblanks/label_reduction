@@ -11,12 +11,12 @@ def main():
     parser.add_argument("group_algo", type=str)
     parser.add_argument("estimator", type=str)
     parser.add_argument("--downsample_prop", type=float, nargs="?",
-                        default=0.)
+                        default=0.2)
     parser.add_argument("--niter", type=int, nargs="?", default=10)
     parser.add_argument("--k_vals", type=int, nargs="*",
-                        default=list(range(5, 21)))
+                        default=list(range(10, 110, 10)))
     parser.add_argument("--wd", type=str, nargs="?",
-                        default="/pool001/zblanks/label_reduction_data/dogs")
+                        default="/pool001/zblanks/label_reduction_data/reddit")
     args = vars(parser.parse_args())
 
     # Get the data path depending on whether we're using meta-data or not
