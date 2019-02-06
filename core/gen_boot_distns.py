@@ -198,8 +198,7 @@ def compute_metrics(exp_df: pd.DataFrame, final_ids: np.ndarray,
                    for i in range(n)]
 
     res_df = combine_dfs(res_dfs)
-    res_df['id'] = experiment_ids[0]
-    return res_df
+    return res_df, experiment_ids[0]
 
 
 def get_boot_distn(df: pd.DataFrame, nsamples: int):
@@ -234,13 +233,19 @@ def get_boot_distns(exp_df: pd.DataFrame, final_ids: np.ndarray,
     # and generate the bootstrap distribution
     n = len(metrics)
     boot_dfs = [pd.DataFrame()] * n
+    raw_dfs = [pd.DataFrame()] * n
     for i in range(n):
-        tmp_res = compute_metrics(exp_df, final_ids, query_str, metrics[i],
-                                  y_true, proba_path)
-        boot_dfs[i] = get_boot_distn(tmp_res, nsamples)
+        raw_dfs[i], exp_id = compute_metrics(exp_df, final_ids, query_str,
+                                             metrics[i], y_true, proba_path)
+        tmp_df = raw_dfs[i].copy()
+
+        # Only use the first experiment ID for the bootstrap results to
+        # simplify the experiment interface downstream
+        tmp_df['id'] = exp_id
+        boot_dfs[i] = get_boot_distn(tmp_df, nsamples)
 
     # Combine the DataFrames
-    return combine_dfs(boot_dfs)
+    return combine_dfs(boot_dfs), combine_dfs(raw_dfs)
 
 
 def check_one_difference(df: pd.DataFrame):
@@ -377,15 +382,12 @@ def gen_boot_df(exp_path: str, proba_path: str, label_path: str,
     # Using each of the query strings, get the corresponding bootstrap
     # DataFrames
     with Parallel(n_jobs=-1, verbose=5) as p:
-        boot_dfs = p(delayed(get_boot_distns)(exp_df, final_ids, query_str,
-                                              metrics, y_true, proba_path,
-                                              nsamples)
-                     for query_str in exp_queries)
+        boot_dfs, raw_dfs = p(delayed(get_boot_distns)(exp_df, final_ids,
+                                                       query_str, metrics,
+                                                       y_true, proba_path,
+                                                       nsamples)
+                              for query_str in exp_queries)
 
     boot_df = combine_dfs(boot_dfs)
-
-    # # Get all the unique experiment pairs to update boot_df
-    # uniq_ids = boot_df['exp_id'].unique()
-    # pair_df = find_experiment_pairs(exp_df, uniq_ids, exp_vars)
-    # return boot_df, pair_df
-    return boot_df
+    raw_df = combine_dfs(raw_dfs)
+    return boot_df, raw_df
