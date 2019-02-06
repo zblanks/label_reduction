@@ -17,8 +17,7 @@ def gen_id(args: dict):
 
     # If we're working with a flat model then the k_vals = -1 since it does
     # not matter; otherwise, we need to map the values to strings
-    if args["method"] == "f" or \
-            (args['method'] == 'hci' and args['group_algo'] == 'comm'):
+    if args["method"] == "f":
         k_vals = ["-1"]
     else:
         k_vals = list(map(str, args["k_vals"]))
@@ -318,11 +317,11 @@ def get_hc_res(k_res: dict, X_test: np.ndarray, args: dict):
     res = hc_pred(k_res['final_model'], X_test,
                   k_res['label_groups'][best_model, :])
 
-    # # If we're working with the community detection algorithm, we need
-    # # to add information about how many groups were inferred (the dict will
-    # # be updated so no need to pass it as a result)
-    # if args['group_algo'] == 'comm':
-    #     args['k_vals'] = [len(np.unique(k_res['label_groups'][0, :]))]
+    # If we're working with the community detection algorithm, we need
+    # to pass junk data because this value was inferred and therefore
+    # was not something we controlled
+    if args['group_algo'] == 'comm':
+        args['k_vals'] = [-1]
 
     # Generate the run ID(s)
     ids = gen_id(args)
