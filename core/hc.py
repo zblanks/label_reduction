@@ -8,7 +8,6 @@ from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.pipeline import Pipeline
 import numpy as np
 from time import time
-from joblib import Parallel, delayed
 
 
 def train_node(X: np.ndarray, y: np.ndarray, rng: np.random.RandomState,
@@ -181,13 +180,8 @@ def hierarchical_model(X_train: np.ndarray, y_train: np.ndarray,
 
     # Train each of the nodes
     start_time = time()
-    # with Parallel(n_jobs=-1) as p:
-    #     models = p(delayed(train_node)(X, y, rng, estimator)
-    #                for (X, y) in zip(X_list, y_list))
-    nmodels = len(idx_list) + 1
-    models = []
-    for i in range(nmodels):
-        models.append(train_node(X_list[i], y_list[i], rng, estimator))
+    models = [train_node(X, y, rng, estimator) for (X, y) in
+              zip(X_list, y_list)]
 
     train_time = time() - start_time
 
