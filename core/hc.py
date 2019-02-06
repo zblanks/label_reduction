@@ -181,13 +181,13 @@ def hierarchical_model(X_train: np.ndarray, y_train: np.ndarray,
 
     # Train each of the nodes
     start_time = time()
-    with Parallel(n_jobs=-1) as p:
-        models = p(delayed(train_node)(X, y, rng, estimator)
-                   for (X, y) in zip(X_list, y_list))
-    # nmodels = len(idx_list) + 1
-    # models = []
-    # for i in range(nmodels):
-    #     models.append(train_node(X_list[i], y_list[i], rng, estimator))
+    # with Parallel(n_jobs=-1) as p:
+    #     models = p(delayed(train_node)(X, y, rng, estimator)
+    #                for (X, y) in zip(X_list, y_list))
+    nmodels = len(idx_list) + 1
+    models = []
+    for i in range(nmodels):
+        models.append(train_node(X_list[i], y_list[i], rng, estimator))
 
     train_time = time() - start_time
 
