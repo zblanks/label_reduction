@@ -384,7 +384,8 @@ def gen_boot_df(exp_path: str, proba_path: str, label_path: str,
 
     boot_df = combine_dfs(boot_dfs)
 
-    # Get all the unique experiment pairs to update boot_df
-    uniq_ids = boot_df['exp_id'].unique()
-    pair_df = find_experiment_pairs(exp_df, uniq_ids, exp_vars)
-    return boot_df, pair_df
+    # # Get all the unique experiment pairs to update boot_df
+    # uniq_ids = boot_df['exp_id'].unique()
+    # pair_df = find_experiment_pairs(exp_df, uniq_ids, exp_vars)
+    # return boot_df, pair_df
+    return boot_df

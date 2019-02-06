@@ -19,14 +19,16 @@ def main():
     proba_path = path.join(args['wd'], 'proba_pred')
     label_path = path.join(args['wd'], 'test_labels.csv')
 
-    # Perform the bootstrap analysis
-    boot_df, pair_df = gen_boot_df(exp_path, proba_path, label_path,
-                                   args['exp_vars'], args['metrics'],
-                                   args['nsamples'])
+    # # Perform the bootstrap analysis
+    # boot_df, pair_df = gen_boot_df(exp_path, proba_path, label_path,
+    #                                args['exp_vars'], args['metrics'],
+    #                                args['nsamples'])
+    boot_df = gen_boot_df(exp_path, proba_path, label_path, args['exp_vars'],
+                          args['metrics'], args['nsamples'])
 
     # Save the DataFrames to disk
     boot_df.to_csv(path.join(args['wd'], 'boot_res.csv'), index=False)
-    pair_df.to_csv(path.join(args['wd'], 'exp_pairs.csv'), index=False)
+    # pair_df.to_csv(path.join(args['wd'], 'exp_pairs.csv'), index=False)
 
 
 if __name__ == '__main__':
