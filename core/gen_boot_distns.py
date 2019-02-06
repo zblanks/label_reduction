@@ -198,6 +198,7 @@ def compute_metrics(exp_df: pd.DataFrame, final_ids: np.ndarray,
                    for i in range(n)]
 
     res_df = combine_dfs(res_dfs)
+    res_df['id'] = experiment_ids
     return res_df, experiment_ids[0]
 
 
