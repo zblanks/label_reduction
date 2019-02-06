@@ -41,17 +41,18 @@ def _compute_var(X: np.ndarray, y: np.ndarray, label: int) -> float:
     return X[idx, :].var()
 
 
-def _kmeans_mean(V: np.ndarray, k: int, ninit: int):
+def _kmeans_mean(V: np.ndarray, k: int, rng: np.random.RandomState,
+                 ninit: int):
     """
     Runs the kmeans-means variant of label reduction
     """
 
     # Cluster the centroids
-    kmeans = KMeans(n_clusters=k, random_state=17, n_jobs=-1, n_init=ninit)
+    kmeans = KMeans(n_clusters=k, random_state=rng, n_jobs=-1, n_init=ninit)
     return kmeans.fit_predict(V)
 
 
-def _community_detection(V: np.ndarray):
+def _community_detection(V: np.ndarray, rng: np.random.RandomState):
     """
     Implements the community detection approach to grouping labels
     """
@@ -62,7 +63,7 @@ def _community_detection(V: np.ndarray):
     S = rbf_kernel(V_new)
 
     # Infer the communities using the Louvain algorithm
-    partition = community.best_partition(nx.Graph(S))
+    partition = community.best_partition(nx.Graph(S), random_state=rng)
 
     # Convert the output to an array so it's in the same format as other
     # return results
@@ -70,7 +71,8 @@ def _community_detection(V: np.ndarray):
 
 
 def group_labels(X: np.ndarray, y: np.ndarray, k: int,
-                 group_algo: str, ninit=10) -> np.ndarray:
+                 group_algo: str, rng: np.random.RandomState,
+                 ninit=10) -> np.ndarray:
     """
     Helper function to group the labels in the data set given a grouping
     algorithm
@@ -88,10 +90,10 @@ def group_labels(X: np.ndarray, y: np.ndarray, k: int,
     if group_algo == "kmm":
         # The kmeans algorithm automatically runs in parallel so we don't
         # need to call it using joblib
-        label_groups = _kmeans_mean(V, k, ninit)
+        label_groups = _kmeans_mean(V, k, rng, ninit)
 
     elif group_algo == "comm":
-        label_groups = _community_detection(V)
+        label_groups = _community_detection(V, rng)
 
     else:
         label_groups = lp_heuristic(V, k)
