@@ -245,7 +245,7 @@ def get_boot_distns(exp_df: pd.DataFrame, final_ids: np.ndarray,
         boot_dfs[i] = get_boot_distn(tmp_df, nsamples)
 
     # Combine the DataFrames
-    return combine_dfs(boot_dfs), combine_dfs(raw_dfs)
+    return {'boot_dfs': combine_dfs(boot_dfs), 'raw_dfs': combine_dfs(raw_dfs)}
 
 
 def check_one_difference(df: pd.DataFrame):
@@ -382,12 +382,11 @@ def gen_boot_df(exp_path: str, proba_path: str, label_path: str,
     # Using each of the query strings, get the corresponding bootstrap
     # DataFrames
     with Parallel(n_jobs=-1, verbose=5) as p:
-        boot_dfs, raw_dfs = p(delayed(get_boot_distns)(exp_df, final_ids,
-                                                       query_str, metrics,
-                                                       y_true, proba_path,
-                                                       nsamples)
-                              for query_str in exp_queries)
+        res = p(delayed(get_boot_distns)(exp_df, final_ids, query_str, metrics,
+                                         y_true, proba_path, nsamples)
+                for query_str in exp_queries)
 
-    boot_df = combine_dfs(boot_dfs)
-    raw_df = combine_dfs(raw_dfs)
+    n = len(res)
+    boot_df = combine_dfs([res[i]['boot_dfs'] for i in range(n)])
+    raw_df = combine_dfs([res[i]['raw_dfs'] for i in range(n)])
     return boot_df, raw_df
