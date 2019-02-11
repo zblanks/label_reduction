@@ -50,16 +50,16 @@ class TransformData(object):
         # Define the default values for the image data
         self._height, self._width, self._n_channel = img_shape
 
-    @staticmethod
-    def _get_labels(files: np.ndarray) -> np.ndarray:
+    def _get_labels(self, files: np.ndarray) -> np.ndarray:
         """
         Infers the labels from the provided image files
         """
 
         # We expect a file to have a format:
-        # /path/to/file/data/label/filename.jpg and so we need to go two
-        # levels up to get a list of all targets in the data
-        targets = os.path.dirname(os.path.dirname(files[0]))
+        # /path/to/file/data/label/filename.jpg and so we need to list the
+        # directory to find the images because we assume it has the file
+        # format shown below
+        targets = os.listdir(self._data_path)
 
         # Using targets we will generate a dictionary like {airport => 0, ...}
         # and this will help us map the names found in the files to their
@@ -75,8 +75,7 @@ class TransformData(object):
         # and so forth
         # therefore we need to determine which folder the file belongs in
         # and using this we can determine its label
-        dirs = [os.path.dirname(file) for file in files]
-        labels = [os.path.basename(val) for val in dirs]
+        labels = [os.path.basename(os.path.dirname(file)) for file in files]
 
         # Finally we need to map the labels we just inferred to their numeric
         # values using the dictionary we just created
@@ -105,7 +104,7 @@ class TransformData(object):
         return {"img_files": img_files, "labels": labels}
 
     def _define_model(self):
-        """Defines the convolutional network used to transform the data
+        """Defines the CNN used to transform the data
         """
         if self._model_name == "xception":
             model = Xception(include_top=False, pooling="max")
