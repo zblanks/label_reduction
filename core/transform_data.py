@@ -193,7 +193,7 @@ class TransformData(object):
             # Determine the number of steps it will take to get through
             # transforming all of the images
             if len(file_dict["img_files"]) % self._batch_size == 0:
-                steps = len(file_dict["img_files"]) / self._batch_size
+                steps = int(len(file_dict["img_files"]) / self._batch_size)
             else:
                 steps = int(np.floor(len(file_dict["img_files"]) /
                                      self._batch_size)) + 1
