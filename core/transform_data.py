@@ -160,6 +160,10 @@ class TransformData(object):
                               (self._batch_size * (i+1))]
             imgs = self._get_imgs(files)
 
+            # Account for the case where the batch size is one
+            if self._batch_size == 1:
+                imgs = imgs.reshape(1, imgs[0], imgs[1], imgs[2])
+
             # Standardize the images
             yield imgs
 
