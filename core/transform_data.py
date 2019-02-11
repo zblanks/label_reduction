@@ -105,29 +105,18 @@ class TransformData(object):
         return {"img_files": img_files, "labels": labels}
 
     def _define_model(self):
-        """Defines the Xception model used to make the predictions
+        """Defines the convolutional network used to transform the data
         """
         if self._model_name == "xception":
-            model = Xception(include_top=False,
-                             input_shape=(self._height, self._width,
-                                          self._n_channel), pooling="max")
+            model = Xception(include_top=False, pooling="max")
         elif self._model_name == "densenet":
-            model = DenseNet201(include_top=False,
-                                input_shape=(self._height, self._width,
-                                             self._n_channel), pooling="max")
+            model = DenseNet201(include_top=False, pooling="max")
         elif self._model_name == "inception":
-            model = InceptionV3(include_top=False,
-                                input_shape=(self._height, self._width,
-                                             self._n_channel), pooling="max")
+            model = InceptionV3(include_top=False, pooling="max")
         elif self._model_name == "nasnet":
-            model = NASNetLarge(include_top=False,
-                                input_shape=(self._height, self._width,
-                                             self._n_channel), pooling="max")
+            model = NASNetLarge(include_top=False, pooling="max")
         else:
-            model = InceptionResNetV2(include_top=False,
-                                      input_shape=(self._height, self._width,
-                                                   self._n_channel),
-                                      pooling="max")
+            model = InceptionResNetV2(include_top=False, pooling="max")
 
         # Sometimes we only have one GPU so Keras will automatically detect
         # this; otherwise we have to specify this setting
@@ -143,18 +132,19 @@ class TransformData(object):
         """
         return img.resize(new_shape)
 
-    def _get_imgs(self, img_files: np.ndarray) -> np.ndarray:
+    @staticmethod
+    def _get_imgs(img_files: np.ndarray) -> np.ndarray:
         """Reads in the images from img_files
         """
         # Read in the subset of images
-        with Parallel(n_jobs=1) as p:
+        with Parallel(n_jobs=-1) as p:
             imgs = p(delayed(Image.open)(file) for file in img_files)
             # imgs = p(delayed(self._convert_img)(img) for img in imgs)
 
-            # Reshape the images
-            new_shape = (self._width, self._height)
-            imgs = p(delayed(self._resize_img)(img, new_shape)
-                     for img in imgs)
+            # # Reshape the images
+            # new_shape = (self._width, self._height)
+            # imgs = p(delayed(self._resize_img)(img, new_shape)
+            #          for img in imgs)
 
             # Convert the image to numpy arrays
             imgs = p(delayed(np.array)(img) for img in imgs)
