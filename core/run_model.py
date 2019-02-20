@@ -8,6 +8,7 @@ import h5py
 from sklearn.model_selection import train_test_split, StratifiedShuffleSplit
 from sklearn.utils import resample
 import os
+import re
 
 
 def gen_id(args: dict):
@@ -19,6 +20,8 @@ def gen_id(args: dict):
     # not matter; otherwise, we need to map the values to strings
     if args["method"] == "f":
         k_vals = ["-1"]
+    elif 'comm' in args['group_algo']:
+        k_vals = args['metrics']
     else:
         k_vals = list(map(str, args["k_vals"]))
 
@@ -37,7 +40,9 @@ def gen_id(args: dict):
     # hashing algorithm
     n = len(k_vals)
     hashes = [""] * n
-    str_keys = np.setdiff1d(list(args.keys()), non_str_keys + ["k_vals"])
+    str_keys = np.setdiff1d(list(args.keys()), non_str_keys + ["k_vals",
+                                                               'metrics',
+                                                               'wd'])
     for i in range(n):
         # Define a temporary list to hold the values before we combine them
         # into a single string
@@ -49,9 +54,6 @@ def gen_id(args: dict):
 
         # Add the remaining keys
         for key in str_keys:
-            if key == "wd":
-                continue
-
             tmp_list.append(args[key])
 
         # Add the i-th k values
@@ -71,9 +73,8 @@ def create_experiment_df(args: dict, ids: list):
     """
 
     # Get the number of meta-classes for a given run
-    n = len(ids)
-    if args["method"] == "f":
-        k_vals = [-1]
+    if args["method"] == "f" or 'comm' in args['group_algo']:
+        k_vals = -1
     else:
         k_vals = args["k_vals"]
 
@@ -84,16 +85,12 @@ def create_experiment_df(args: dict, ids: list):
         # Exclude certain keys {k_vals, wd}
         if key in ["k_vals", "wd"]:
             continue
-
-        # Otherwise add it to the data dict
-        if key != "method":
-            data[key] = np.repeat([args[key]], n)
         else:
-            data["k"] = k_vals
-            data["method"] = args['method']
+            data[key] = args[key]
 
-    # Add the hash IDs
+    # Add the hash IDs and the "k" values
     data["id"] = ids
+    data['k'] = k_vals
 
     # Build the final DataFrame
     return pd.DataFrame(data)
@@ -151,8 +148,8 @@ def train_hc(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
 
     # If we're doing community detection then we only have one inferred
     # community; otherwise we have to use the clustering-based approach
-    if args['group_algo'] == 'comm':
-        n = 1
+    if 'comm' in args['group_algo']:
+        n = len(args['metrics'])
     else:
         n = len(args['k_vals'])
 
@@ -161,16 +158,19 @@ def train_hc(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
     nlabels = len(np.unique(y_train))
     label_groups = np.empty(shape=(n, nlabels), dtype=np.int32)
     for i in range(n):
-        if args['group_algo'] == 'comm':
-            print('Inferring communities and fitting HC')
-        else:
-            print("Searching over k = {}".format(args["k_vals"][i]))
-
         # Infer the label groups
         start_time = time()
-        label_groups[i, :] = group_labels(X_train, y_train, args["k_vals"][i],
-                                          args["group_algo"], rng,
-                                          args['niter'])
+        if 'comm' in args['group_algo']:
+            print('Inferring with: {}'.format(args['metrics'][i]))
+            label_groups[i, :] = group_labels(X_train, y_train, -1,
+                                              args['metrics'][i], rng,
+                                              args['niter'])
+        else:
+            print("Searching over k = {}".format(args["k_vals"][i]))
+            label_groups[i, :] = group_labels(X_train, y_train,
+                                              args['k_vals'][i],
+                                              args['group_algo'], rng,
+                                              args['niter'])
         cluster_time = time() - start_time
 
         # Fixing the label groups, get the best HC over the hyper-parameter
@@ -317,12 +317,6 @@ def get_hc_res(k_res: dict, X_test: np.ndarray, args: dict):
     res = hc_pred(k_res['final_model'], X_test,
                   k_res['label_groups'][best_model, :])
 
-    # If we're working with the community detection algorithm, we need
-    # to pass junk data because this value was inferred and therefore
-    # was not something we controlled
-    if args['group_algo'] == 'comm':
-        args['k_vals'] = [-1]
-
     # Generate the run ID(s)
     ids = gen_id(args)
 
@@ -345,6 +339,7 @@ def fit_hc(data_dict: dict, rng: np.random.RandomState, args: dict):
     X_val = data_dict['X_val']
     y_val = data_dict['y_val']
     X_test = data_dict['X_test']
+
     k_res = train_hc(X_train, y_train, X_val, y_val, args, rng)
 
     # Get the results from the experiments
@@ -479,7 +474,7 @@ def run_model(args: dict, datapath: str):
         save_fc_res(res, wd)
 
     else:
-        if args['group_algo'] in ['kmm', 'lp', 'comm']:
+        if re.search(r'kmm|lp|comm.*', args['group_algo']):
             res = fit_hc(data_dict, rng, args)
         elif args['group_algo'] == 'spectral':
             res = fit_spectral(data_dict, rng, args)
@@ -493,6 +488,9 @@ def run_model(args: dict, datapath: str):
     exp_df = create_experiment_df(args, res['ids'])
     exp_path = os.path.join(wd, "experiment_settings.csv")
     if os.path.exists(exp_path):
+        # Ensure that the columns are in the same order
+        colnames = pd.read_csv(exp_path, nrows=0).columns.tolist()
+        exp_df = exp_df[colnames]
         exp_df.to_csv(exp_path, mode="a", header=False, index=False)
     else:
         exp_df.to_csv(exp_path, index=False)

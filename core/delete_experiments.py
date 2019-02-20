@@ -37,7 +37,7 @@ def delete_experiments():
     group_df = pd.read_csv(os.path.join(args['wd'], 'group_res.csv'))
 
     # Infer the appropriate experiment IDs given the query
-    exp_ids = exp_df.query(args['query']).id.tolist()
+    exp_ids = exp_df.query(args['query'], engine='python').id.tolist()
 
     # Remove exp_ids from the exp_df, search_df, and group_df
     exp_df = exp_df[~exp_df['id'].isin(exp_ids)]

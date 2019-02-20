@@ -2,7 +2,11 @@ import numpy as np
 from core.label_group_milp import lp_heuristic
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
+from scipy.stats import wasserstein_distance
 from sklearn.metrics.pairwise import rbf_kernel
+from sklearn.metrics import pairwise_distances
+from joblib import Parallel, delayed
+from itertools import product
 import networkx as nx
 import community
 
@@ -52,15 +56,42 @@ def _kmeans_mean(V: np.ndarray, k: int, rng: np.random.RandomState,
     return kmeans.fit_predict(V)
 
 
-def _community_detection(V: np.ndarray, rng: np.random.RandomState):
+def _community_detection(V: np.ndarray, metric: str,
+                         rng: np.random.RandomState):
     """
     Implements the community detection approach to grouping labels
     """
 
-    # First we need to generate an affinity matrix of similarity values
-    scaler = StandardScaler()
-    V_new = scaler.fit_transform(V)
-    S = rbf_kernel(V_new)
+    # Implement the community detection approach with different similarity
+    # or distance metrics (our options are the RBF kernel, L2 distance,
+    # Earth Mover's Distance, and the L-infinity distance
+
+    # We're working directly with a similarity metric
+    if 'rbf' in metric:
+        S = rbf_kernel(V)
+
+    # Otherwise we're working with a distance metric and need to
+    # treat it differently
+    else:
+        if 'l2' in metric:
+            D = pairwise_distances(V, metric='euclidean', n_jobs=-1)
+        elif 'emd' in metric:
+            # Sklearn doesn't have a built-in function for the
+            # EMD so we have to implement the parallel code ourselves
+            n = V.shape[0]
+            idx = product(range(n), range(n))
+            f = delayed(wasserstein_distance)
+            res = Parallel(n_jobs=-1, verbose=0)(
+                f(V[val[0], :], V[val[1], :]) for val in idx
+            )
+
+            # Get the array
+            D = np.array(res).reshape(n, n)
+        else:
+            D = pairwise_distances(V, metric='chebyshev', n_jobs=-1)
+
+        # Convert the distance matrix into a similarity matrix
+        S = 1 / np.exp(D)
 
     # Infer the communities using the Louvain algorithm
     partition = community.best_partition(nx.Graph(S), random_state=rng)
@@ -92,8 +123,8 @@ def group_labels(X: np.ndarray, y: np.ndarray, k: int,
         # need to call it using joblib
         label_groups = _kmeans_mean(V, k, rng, ninit)
 
-    elif group_algo == "comm":
-        label_groups = _community_detection(V, rng)
+    elif 'comm' in group_algo:
+        label_groups = _community_detection(V, group_algo, rng)
 
     else:
         label_groups = lp_heuristic(V, k)

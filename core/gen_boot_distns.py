@@ -1,11 +1,10 @@
 import pandas as pd
 import numpy as np
-from itertools import combinations
 import re
 import os
-import hashlib
 from sklearn.utils import resample
 from joblib import Parallel, delayed
+from scipy.stats import percentileofscore, gaussian_kde
 
 
 def combine_dfs(df_list: list) -> pd.DataFrame:
@@ -110,6 +109,16 @@ def remap_target(y_true: np.ndarray, label_map: np.ndarray) -> np.ndarray:
     return new_y_true
 
 
+def permute_node_target(y_node: np.ndarray, nsamples=1000):
+    """
+    Permutes the node target vector so that we can compute the distribution
+    of node-level performance
+    """
+    rng = np.random.RandomState(17)
+    y_random = np.array([rng.permutation(y_node) for _ in range(nsamples)])
+    return y_random.reshape(nsamples, len(y_node))
+
+
 def get_label_map(exp_id: str, df: pd.DataFrame) -> np.ndarray:
     """
     Gets the label map given the run ID
@@ -145,29 +154,8 @@ def top_k_accuracy(y_true: np.ndarray, proba_mat: np.ndarray,
         return np.sum(in_top_k) / n
 
 
-def compute_leaf_vals(files: list, experiment_ids: list, y_true: np.ndarray,
-                      metric: str):
-    """
-    Computes the leaf top 1 for all of the experiments
-    """
-
-    # Get the probability matrices
-    proba_mats = [np.load(file) for file in files]
-
-    # Compute the leaf top 1 accuracy for all matrices
-    if metric == 'leaf_top1':
-        vals = [top_k_accuracy(y_true, proba_mat, k=1)
-                for proba_mat in proba_mats]
-    else:
-        vals = [top_k_accuracy(y_true, proba_mat, k=3)
-                for proba_mat in proba_mats]
-
-    # Create a DataFrame to store the results
-    return pd.DataFrame({'id': experiment_ids[0], 'metric': metric,
-                         'value': vals})
-
-
-def compute_metric_value(prob_file: str, y_true: np.ndarray, metric: str):
+def compute_metric_value(prob_file: str, y_true: np.ndarray, metric: str,
+                         **kwargs):
     """
     Computes a leaf-level metric for a given experiment
     """
@@ -181,11 +169,24 @@ def compute_metric_value(prob_file: str, y_true: np.ndarray, metric: str):
     elif metric == 'leaf_top3':
         val = top_k_accuracy(y_true, proba_mat, k=3)
     else:
-        # For node_top1 we have to compute the accuracy value and then
-        # normalize based on the number of meta-classes
-        val = top_k_accuracy(y_true, proba_mat, k=1)
-        n_metaclasses = len(np.unique(y_true))
-        val /= (1 / n_metaclasses)
+        # For the node_top1, we have to provide the random target vectors
+        # so that we can compare our values relative to a random classifier
+        n = len(y_true)
+        y_pred = proba_mat.argmax(axis=1)
+        true_val = np.sum(y_true == y_pred) / n
+
+        nsamples = kwargs['rand_targets'].shape[0]
+        rand_distn = np.array(
+            [np.sum(kwargs['rand_targets'][i, :].flatten() == y_pred) / n
+             for i in range(nsamples)]
+        )
+        print("True NT1:", true_val)
+        print("Rand NT1:", rand_distn[0:10])
+        print("Meta-class num:", proba_mat.shape[1])
+
+        # Compute where in the distribution the true values lies in the
+        # random distribution
+        val = percentileofscore(rand_distn, true_val)
 
     return pd.DataFrame({'metric': [metric], 'value': [val]})
 
@@ -237,8 +238,15 @@ def compute_metrics(exp_df: pd.DataFrame, final_ids: np.ndarray,
             res_dfs = [compute_metric_value(files[i]['hci'], target_vecs[i],
                                             metric) for i in range(n)]
         else:
-            res_dfs = [compute_metric_value(files[i]['node'], target_vecs[i],
-                                            metric) for i in range(n)]
+            # To compute the node_top1 we need the true and random target
+            # vectors
+            rand_targets = [permute_node_target(target_vecs[i])
+                            for i in range(n)]
+            res_dfs = [
+                compute_metric_value(files[i]['node'], target_vecs[i],
+                                     metric, rand_targets=rand_targets[i])
+                for i in range(n)
+            ]
     else:
         res_dfs = [compute_metric_value(files[i]['f'], target_vecs[i], metric)
                    for i in range(n)]
@@ -278,7 +286,7 @@ def get_boot_distns(exp_df: pd.DataFrame, group_df: pd.DataFrame,
     """
 
     # If we are working with a flat classifier then we cannot compute
-    # the node_top1 metric and thus need to remove it from the metrics#
+    # the node_top1 metric and thus need to remove it from the metrics
     # list
     if '(method == "f")' in query_str:
         new_metrics = metrics[:]
@@ -312,89 +320,6 @@ def get_boot_distns(exp_df: pd.DataFrame, group_df: pd.DataFrame,
 
     # Combine the DataFrames
     return {'boot_dfs': combine_dfs(boot_dfs), 'raw_dfs': combine_dfs(raw_dfs)}
-
-
-# def check_one_difference(df: pd.DataFrame):
-#     """
-#     Checks if a DataFrame has only one difference between the experiment
-#     settings with some exceptions
-#     """
-#
-#     # If one of the methods is "f" in which case we need to ignore the
-#     # the group_algo because we gave an arbitrary value
-#     if 'f' in df.method.values:
-#         # Drop the group_algo column because it's not relevant
-#         new_df = df.drop(labels=['group_algo'], axis=1)
-#     else:
-#         new_df = df.copy()
-#
-#     # Check if there is only one difference between the experiment settings
-#     new_df = new_df.drop(labels=['id'], axis=1)
-#     row_diffs = new_df.nunique()
-#     return len(np.where(row_diffs.values > 1)[0]) == 1
-#
-#
-# def gen_id(id0: str, id1: str) -> str:
-#     """
-#     Generates a hash ID to identify an experiment pair
-#     """
-#     hash_str = id0 + id1
-#     hash_str = hash_str.encode("UTF-8")
-#     return hashlib.sha1(hash_str).hexdigest()
-#
-#
-# def find_experiment_pairs(exp_df: pd.DataFrame, uniq_ids: np.ndarray,
-#                           exp_vars: list):
-#     """
-#     Finds all unique experiment pairs and generates a DataFrame mapping
-#     the ID to a pair ID
-#     """
-#
-#     # First subset the experiment DataFrame with only the unique IDs and
-#     # the relevant variables
-#     df = exp_df.loc[exp_df['id'].isin(uniq_ids), exp_vars + ['id']]
-#     df.reset_index(drop=True, inplace=True)
-#
-#     # Generate all choose(n, 2) experiment pairs
-#     exp_combos = combinations(df.index, 2)
-#
-#     # Go through every row combination and check if it is match with one
-#     # another; we can tell it is match if the following conditions hold
-#     # 1. There is only one difference between the rows
-#     # 2. The method cannot be the same EXCEPT if it's with the group_algo AND
-#     # method == "hci"
-#     exp_pairs = []
-#     for (i, combo) in enumerate(exp_combos):
-#         sub_df = df.iloc[list(combo), :].reset_index(drop=True)
-#
-#         # Check if there is only one difference with the exception for
-#         # method == 'f'
-#         only_one_diff = check_one_difference(sub_df)
-#
-#         # Check if methods are different
-#         diff_methods = sub_df.loc[0, "method"] != sub_df.loc[1, "method"]
-#
-#         # UNLESS it's HCI and group_algo are different
-#         both_hci = np.all(sub_df["method"] == "hci")
-#         diff_group_algo = sub_df.loc[0, "group_algo"] != sub_df.loc[1, "group_algo"]
-#
-#         # Combine the second condition
-#         second_cond = diff_methods or (both_hci and diff_group_algo)
-#
-#         # If both the first and second condition are true then we know they
-#         # are experiment pairs
-#         if only_one_diff and second_cond:
-#             # Generate a uniq ID for the pair
-#             exp_ids = sub_df['id'].values
-#             pair_id = gen_id(exp_ids[0], exp_ids[1])
-#
-#             # Add the pair ID along with the experiment IDs
-#             exp_pairs.append((pair_id, exp_ids[0], exp_ids[1]))
-#
-#     # Build the DataFrames mapping the combinations for the boot and pair
-#     # DataFrame
-#     pair_df = pd.DataFrame(exp_pairs, columns=['pair_id', 'id0', 'id1'])
-#     return pair_df
 
 
 def get_final_ids(proba_path: str):

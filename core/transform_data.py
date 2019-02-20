@@ -11,6 +11,7 @@ from PIL import Image
 import h5py
 from joblib import Parallel, delayed
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+Image.MAX_IMAGE_PIXELS = 1000000000
 
 
 class TransformData(object):
@@ -107,15 +108,25 @@ class TransformData(object):
         """Defines the CNN used to transform the data
         """
         if self._model_name == "xception":
-            model = Xception(include_top=False, pooling="max")
+            model = Xception(include_top=False, pooling="max",
+                             input_shape=(self._height, self._width,
+                                          self._n_channel))
         elif self._model_name == "densenet":
-            model = DenseNet201(include_top=False, pooling="max")
+            model = DenseNet201(include_top=False, pooling="max",
+                                input_shape=(self._height, self._width,
+                                             self._n_channel))
         elif self._model_name == "inception":
-            model = InceptionV3(include_top=False, pooling="max")
+            model = InceptionV3(include_top=False, pooling="max",
+                                input_shape=(self._height, self._width,
+                                             self._n_channel))
         elif self._model_name == "nasnet":
-            model = NASNetLarge(include_top=False, pooling="max")
+            model = NASNetLarge(include_top=False, pooling="max",
+                                input_shape=(self._height, self._width,
+                                             self._n_channel))
         else:
-            model = InceptionResNetV2(include_top=False, pooling="max")
+            model = InceptionResNetV2(include_top=False, pooling="max",
+                                      input_shape=(self._height, self._width,
+                                                   self._n_channel))
 
         # Sometimes we only have one GPU so Keras will automatically detect
         # this; otherwise we have to specify this setting
@@ -131,19 +142,18 @@ class TransformData(object):
         """
         return img.resize(new_shape)
 
-    @staticmethod
-    def _get_imgs(img_files: np.ndarray) -> np.ndarray:
+    def _get_imgs(self, img_files: np.ndarray) -> np.ndarray:
         """Reads in the images from img_files
         """
         # Read in the subset of images
-        with Parallel(n_jobs=-1) as p:
+        with Parallel(n_jobs=1) as p:
             imgs = p(delayed(Image.open)(file) for file in img_files)
             # imgs = p(delayed(self._convert_img)(img) for img in imgs)
 
-            # # Reshape the images
-            # new_shape = (self._width, self._height)
-            # imgs = p(delayed(self._resize_img)(img, new_shape)
-            #          for img in imgs)
+            # Reshape the images
+            new_shape = (self._width, self._height)
+            imgs = p(delayed(self._resize_img)(img, new_shape)
+                     for img in imgs)
 
             # Convert the image to numpy arrays
             imgs = p(delayed(np.array)(img) for img in imgs)
@@ -159,6 +169,16 @@ class TransformData(object):
             files = img_files[(self._batch_size * i):
                               (self._batch_size * (i+1))]
             imgs = self._get_imgs(files)
+
+            # # If the image is extremely large we need to shrink it because
+            # # otherwise we'll run out of memory and it will take forever
+            # # to process
+            # min_dim = min(imgs.shape[1], imgs.shape[2])
+            # if (min_dim >= 500) and (self._batch_size == 1):
+            #     imgs = np.squeeze(imgs, axis=0)
+            #     imgs = Image.fromarray(imgs)
+            #     imgs.thumbnail((500, 500))
+            #     imgs = np.expand_dims(np.array(imgs), axis=0)
 
             # Standardize the images
             yield imgs

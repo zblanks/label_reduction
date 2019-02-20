@@ -194,7 +194,9 @@ def hierarchical_model(X_train: np.ndarray, y_train: np.ndarray,
     acc = accuracy_score(y_val, y_pred)
 
     # Compute the AUC
-    y_mat = OneHotEncoder(sparse=False).fit_transform(y_val.reshape(-1, 1))
+    y_mat = OneHotEncoder(sparse=False, categories='auto').fit_transform(
+        y_val.reshape(-1, 1)
+    )
     auc = roc_auc_score(y_mat, val_res["proba_pred"])
 
     return {"train_time": train_time, "models": models, "acc": acc, "auc": auc}
