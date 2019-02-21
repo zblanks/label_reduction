@@ -17,6 +17,8 @@ def main():
                         default=list(range(10, 110, 10)))
     parser.add_argument("--wd", type=str, nargs="?",
                         default="/pool001/zblanks/label_reduction_data/reddit")
+    parser.add_argument('--metrics', type=str, nargs='*',
+                        default='')
     args = vars(parser.parse_args())
 
     # Get the data path depending on whether we're using meta-data or not
