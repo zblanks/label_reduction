@@ -18,7 +18,7 @@ def main():
     parser.add_argument("--wd", type=str, nargs="?",
                         default="/pool001/zblanks/label_reduction_data/fmow")
     parser.add_argument('--use_meta', type=int, nargs='?', default=1)
-    parser.add_argument('--metrics', type=str, nargs='*',
+    parser.add_argument('--metric', type=str, nargs='*',
                         default='')
     args = vars(parser.parse_args())
 

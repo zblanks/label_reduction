@@ -17,7 +17,7 @@ def main():
                         default=list(range(5, 21)))
     parser.add_argument("--wd", type=str, nargs="?",
                         default="/pool001/zblanks/label_reduction_data/cifar")
-    parser.add_argument('--metrics', type=str, nargs='*',
+    parser.add_argument('--metric', type=str, nargs='*',
                         default='')
     args = vars(parser.parse_args())
 
