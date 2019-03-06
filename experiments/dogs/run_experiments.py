@@ -19,6 +19,7 @@ def main():
                         default="/pool001/zblanks/label_reduction_data/dogs")
     parser.add_argument('--metrics', type=str, nargs='*',
                         default='')
+    parser.add_argument('--features', type=str, nargs='?', default='lda')
     args = vars(parser.parse_args())
 
     # Get the data path depending on whether we're using meta-data or not

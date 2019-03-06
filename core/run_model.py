@@ -401,27 +401,41 @@ def fit_spectral_gen(data_dict: dict, rng: np.random.RandomState, args: dict):
     # To use the spectral clustering model, we need to generate the confusion
     # matrix for the validation set and then pass this as an argument to the
     # function
-    proba_pred = k_res['final_model'].predict(X_val)
+    best_model = k_res['best_model']
+    label_groups = k_res['label_groups'][best_model, :]
+    proba_pred = hc_pred(k_res['final_model'], X_val, label_groups)
+    good_idx = proba_pred['good_idx']
+    proba_pred = proba_pred['proba_pred'][good_idx, :]
     y_pred = proba_pred.argmax(axis=1)
     M = confusion_matrix(y_val, y_pred)
     A = .5 * (M + M.T)
-    k = k_res['label_groups'].shape[1]
-    spectral_res = spectral_model(X_train, y_train, X_val, y_val, k,
-                                  rng, args['estimator'], args['features'],
-                                  affinity_mat=A)
+    k = len(np.unique(label_groups))
+    spectral_res, label_groups = spectral_model(
+        X_train, y_train, X_val, y_val, k, rng, args['estimator'],
+        args['features'], affinity_mat=A
+    )
 
     # Since we had the initial training time from the HC, we need to add this
     # value to the spectral_res object
     n = len(k_res['all_models'])
-    train_time = sum((k_res['all_models'][i]['train_time'] for i in range(n)))
-    cluster_time = sum((k_res['all_models'][i]['cluster_time'] for i in range(n)))
+    train_time = sum([k_res['all_models'][i]['train_time'] for i in range(n)])
+    cluster_time = sum([k_res['all_models'][i]['cluster_time'] for i in range(n)])
     spectral_res['train_time'] += train_time
     spectral_res['cluster_time'] += cluster_time
 
     # Finally for the experiment generation process to work we have to
     # re-set the group algorithm back to its original value
     args['group_algo'] = group_algo
-    return get_hc_res(spectral_res, X_test, args)
+
+    # We also have to only provide a single k-value because only used the
+    # number corresponding to the best HC model
+    args['k_vals'] = [k]
+
+    label_groups = label_groups.reshape(1, -1)
+
+    res = {'all_models': [spectral_res], 'final_model': spectral_res['models'],
+           'label_groups': label_groups, 'best_model': 0}
+    return get_hc_res(res, X_test, args)
 
 
 def save_fc_res(fc_res: dict, wd: str):
