@@ -8,10 +8,12 @@ from glob import glob
 import os
 import numpy as np
 from PIL import Image
+from PIL import ImageFile
 import h5py
 from joblib import Parallel, delayed
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 Image.MAX_IMAGE_PIXELS = 1000000000
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 class TransformData(object):
@@ -169,16 +171,6 @@ class TransformData(object):
             files = img_files[(self._batch_size * i):
                               (self._batch_size * (i+1))]
             imgs = self._get_imgs(files)
-
-            # # If the image is extremely large we need to shrink it because
-            # # otherwise we'll run out of memory and it will take forever
-            # # to process
-            # min_dim = min(imgs.shape[1], imgs.shape[2])
-            # if (min_dim >= 500) and (self._batch_size == 1):
-            #     imgs = np.squeeze(imgs, axis=0)
-            #     imgs = Image.fromarray(imgs)
-            #     imgs.thumbnail((500, 500))
-            #     imgs = np.expand_dims(np.array(imgs), axis=0)
 
             # Standardize the images
             yield imgs

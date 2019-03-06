@@ -3,6 +3,7 @@
 export(build_nt1)
 export(gen_boot_distn)
 export(gen_boot_plots)
+export(gen_leaf_plot)
 export(gen_tex_code)
 export(gen_time_plot)
 importFrom(rlang,.data)

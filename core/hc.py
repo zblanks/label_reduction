@@ -1,17 +1,18 @@
 from sklearn.linear_model import SGDClassifier
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import confusion_matrix, accuracy_score, roc_auc_score
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.metrics import confusion_matrix, accuracy_score
+from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import SpectralClustering
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 import numpy as np
 from time import time
 
 
 def train_node(X: np.ndarray, y: np.ndarray, rng: np.random.RandomState,
-               estimator: str):
+               estimator: str, features: str):
     """
     Trains a given node for any type of classifier
     """
@@ -28,7 +29,7 @@ def train_node(X: np.ndarray, y: np.ndarray, rng: np.random.RandomState,
     if estimator == "log":
         model = SGDClassifier(loss="log", random_state=rng,
                               class_weight="balanced", warm_start=True,
-                              max_iter=1000, tol=1e-3)
+                              max_iter=1000, tol=1e-3, n_jobs=-1)
 
     elif estimator == 'knn':
         model = KNeighborsClassifier(n_jobs=-1)
@@ -37,11 +38,14 @@ def train_node(X: np.ndarray, y: np.ndarray, rng: np.random.RandomState,
         model = RandomForestClassifier(random_state=rng, n_estimators=100,
                                        class_weight="balanced", n_jobs=-1)
 
-    # Combine all of the elements to create a sklean pipeline to simplify
+    # Combine all of the elements to create a sklearn pipeline to simplify
     # the process of training a particular model
     if nlabels < X.shape[1]:
-        lda = LinearDiscriminantAnalysis(n_components=(nlabels - 1))
-        steps = [('scaler', scaler), ('lda', lda), ('model', model)]
+        if features == 'lda':
+            features = LinearDiscriminantAnalysis(n_components=(nlabels - 1))
+        else:
+            features = PCA(n_components=50, random_state=rng)
+        steps = [('scaler', scaler), ('features', features), ('model', model)]
     else:
         steps = [('scaler', scaler), ('model', model)]
 
@@ -63,15 +67,18 @@ def remap_labels(y: np.ndarray, label_groups: np.ndarray) -> np.ndarray:
     return y_new
 
 
-def flat_model(X_train: np.ndarray, y_train: np.ndarray, X_test: np.ndarray,
-               rng: np.random.RandomState, estimator: str) -> dict:
+def flat_model(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
+               y_val: np.ndarray, X_test: np.ndarray,
+               rng: np.random.RandomState, estimator: str,
+               features: str) -> dict:
     """
     Trains the FC and gets the out of sample predictions
     """
 
     # Train the model
     start_time = time()
-    clf = train_node(X_train, y_train, rng, estimator)
+    clf = train_node(X_train, y_train, rng, estimator, features)
+    print('Flat score:', clf.score(X_val, y_val))
     train_time = time() - start_time
 
     # Get the test set predictions
@@ -157,7 +164,7 @@ def hierarchical_model(X_train: np.ndarray, y_train: np.ndarray,
                        X_val: np.ndarray, y_val: np.ndarray,
                        label_groups: np.ndarray,
                        rng: np.random.RandomState,
-                       estimator: str) -> dict:
+                       estimator: str, features: str) -> dict:
     """
     Trains the HC and gets the out of sample predictions
     """
@@ -180,7 +187,7 @@ def hierarchical_model(X_train: np.ndarray, y_train: np.ndarray,
 
     # Train each of the nodes
     start_time = time()
-    models = [train_node(X, y, rng, estimator) for (X, y) in
+    models = [train_node(X, y, rng, estimator, features) for (X, y) in
               zip(X_list, y_list)]
 
     train_time = time() - start_time
@@ -193,18 +200,12 @@ def hierarchical_model(X_train: np.ndarray, y_train: np.ndarray,
     y_val = y_val[val_res["good_idx"]]
     acc = accuracy_score(y_val, y_pred)
 
-    # Compute the AUC
-    y_mat = OneHotEncoder(sparse=False, categories='auto').fit_transform(
-        y_val.reshape(-1, 1)
-    )
-    auc = roc_auc_score(y_mat, val_res["proba_pred"])
-
-    return {"train_time": train_time, "models": models, "acc": acc, "auc": auc}
+    return {"train_time": train_time, "models": models, "acc": acc}
 
 
 def spectral_model(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
                    y_val: np.ndarray, k: int, rng: np.random.RandomState,
-                   estimator: str, **kwargs):
+                   estimator: str, features: str, **kwargs):
     """
     Trains the hierarchical classifier using the spectral clustering
     approach to finding Z
@@ -212,7 +213,7 @@ def spectral_model(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
     # Train the initial model (if we not already called the spectral function)
     if 'affinity_mat' not in kwargs.keys():
         start_time = time()
-        init_clf = train_node(X_train, y_train, rng, estimator)
+        init_clf = train_node(X_train, y_train, rng, estimator, features)
         init_train_time = time() - start_time
 
         # Get the confusion matrix to use for spectral clustering
@@ -234,7 +235,7 @@ def spectral_model(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
 
     # Feed the label groups into the standard way of training the HC
     res = hierarchical_model(X_train, y_train, X_val, y_val, label_groups,
-                             rng, estimator)
+                             rng, estimator, features)
 
     # Update the training time of the HC to include the time we spent training
     # the initial classifier

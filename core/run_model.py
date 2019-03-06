@@ -5,8 +5,9 @@ import pandas as pd
 import numpy as np
 from time import time
 import h5py
-from sklearn.model_selection import train_test_split, StratifiedShuffleSplit
+from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.utils import resample
+from sklearn.metrics import confusion_matrix
 import os
 import re
 
@@ -122,19 +123,17 @@ def build_search_df(ids: list, k_res: list) -> pd.DataFrame:
     # Get the values from the various stored metrics
     n = len(k_res)
     acc_vals = [k_res[i]["acc"] for i in range(n)]
-    auc_vals = [k_res[i]["auc"] for i in range(n)]
     train_times = [k_res[i]["train_time"] for i in range(n)]
     cluster_times = [k_res[i]["cluster_time"] for i in range(n)]
 
     # Build the DataFrame
-    metrics = ["top1", "auc", "train_time", "cluster_time"]
+    metrics = ["top1", "train_time", "cluster_time"]
     nmetrics = len(metrics)
 
     search_df = pd.DataFrame(
         data={"id": np.tile(ids, nmetrics),
               "metric": np.repeat(metrics, len(ids)),
-              "value": np.concatenate([acc_vals, auc_vals, train_times,
-                                       cluster_times])}
+              "value": np.concatenate([acc_vals, train_times, cluster_times])}
     )
 
     return search_df
@@ -177,11 +176,12 @@ def train_hc(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
         # space
         k_res[i] = hierarchical_model(
             X_train, y_train, X_val, y_val, label_groups[i, :], rng,
-            args["estimator"]
+            args["estimator"], args['features']
         )
 
         # Add the cluster time
         k_res[i]["cluster_time"] = cluster_time
+        print('Acc score:', k_res[i]['acc'])
 
     # Get the best model
     best_model = np.array([k_res[i]["acc"] for i in range(n)]).argmax()
@@ -213,12 +213,12 @@ def train_spectral(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
         if i == 0:
             k_res[i], A, tmp_groups = spectral_model(
                 X_train, y_train, X_val, y_val, args['k_vals'][i], rng,
-                args['estimator'],
+                args['estimator'], args['features']
             )
         else:
             k_res[i], tmp_groups = spectral_model(
                 X_train, y_train, X_val, y_val, args['k_vals'][i], rng,
-                args['estimator'], affinity_mat=A
+                args['estimator'], args['features'], affinity_mat=A
             )
 
         # Add the label groups to the matrix
@@ -231,6 +231,28 @@ def train_spectral(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
     # best model so we can evaluate it out-of-sample
     return {"all_models": k_res, "final_model": k_res[best_model]["models"],
             "label_groups": label_groups, "best_model": best_model}
+
+
+def split_data(X: np.ndarray, y: np.ndarray, test_size: float):
+    """
+    Splits the data into a train-test split while respecting the underlying
+    label distribution
+    """
+
+    splitter = StratifiedShuffleSplit(
+        n_splits=1, test_size=test_size, random_state=17
+    )
+
+    # Split the data
+    idx = splitter.split(X, y)
+    idx = [val for val in idx]
+    train_idx = idx[0][0]
+    test_idx = idx[0][1]
+    X_train = X[train_idx]
+    y_train = y[train_idx]
+    X_test = X[test_idx]
+    y_test = y[test_idx]
+    return X_train, y_train, X_test, y_test
 
 
 def prep_data(datapath: str, savepath: str, rng: np.random.RandomState,
@@ -249,31 +271,18 @@ def prep_data(datapath: str, savepath: str, rng: np.random.RandomState,
     # If we need to, we will down-sample the data proportional to y so
     # that we can decrease computation time
     if downsample_prop > 0.:
-        # If the proportion is more than 0, then we will downsample the data
-        # accordingly
-        splitter = StratifiedShuffleSplit(
-            n_splits=1, test_size=(1 - downsample_prop), random_state=17
-        )
+        X, y, _, _ = split_data(X, y, test_size=(1 - downsample_prop))
 
-        idx = splitter.split(X, y)
-        idx = [val for val in idx]
-        new_idx = idx[0][0]
-        X = X[new_idx]
-        y = y[new_idx]
-
-    # First generate the train-test split
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=17
-    )
-
-    # Now generate the train-validation split
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_train, y_train, test_size=0.2, random_state=17
-    )
+    # Generate the train-test split while respecting the underlying label
+    # distribution
+    X_train, y_train, X_test, y_test = split_data(X, y, test_size=0.2)
 
     # Save y_test to disk so that we can work with it later
     if not os.path.exists(savepath):
         pd.Series(y_test).to_csv(savepath, index=False, header=False)
+
+    # Now generate the train-validation split
+    X_train, y_train, X_val, y_val = split_data(X_train, y_train, test_size=0.2)
 
     # Finally we will bootstrap the training data so that we can have a
     # distribution of estimator performance
@@ -291,10 +300,11 @@ def fit_fc(data_dict: dict, rng: np.random.RandomState, args: dict):
     # Train/predict the FC
     X_train = data_dict["X_train"]
     y_train = data_dict["y_train"]
+    X_val = data_dict['X_val']
+    y_val = data_dict['y_val']
     X_test = data_dict["X_test"]
-    res = flat_model(X_train, y_train, X_test, rng, args['estimator'])
-    # res = flat_model(X_train, y_train, X_test, rng, args["estimator"],
-    #                  args["niter"])
+    res = flat_model(X_train, y_train, X_val, y_val, X_test, rng,
+                     args['estimator'], args['features'])
 
     # Generate the run ID
     run_id = gen_id(args)
@@ -361,6 +371,57 @@ def fit_spectral(data_dict: dict, rng: np.random.RandomState, args: dict):
 
     # Get the test results from the spectral HC
     return get_hc_res(k_res, X_test, args)
+
+
+def fit_spectral_gen(data_dict: dict, rng: np.random.RandomState, args: dict):
+    """
+    Fits the spectral clustering generalization where we first train an HC
+    and then use that for the spectral clustering framework
+    """
+
+    X_train = data_dict["X_train"]
+    y_train = data_dict["y_train"]
+    X_val = data_dict['X_val']
+    y_val = data_dict['y_val']
+    X_test = data_dict['X_test']
+
+    # We need to infer which HC method to employ for the generalization
+    group_algo = args['group_algo']
+    if 'kmm' in group_algo:
+        args['group_algo'] = 'kmm'
+    elif 'lp' in group_algo:
+        args['group_algo'] = 'lp'
+    elif 'comm' in group_algo:
+        args['group_algo'] = 'comm'
+    else:
+        raise ValueError('Invalid grouping algorithm')
+
+    k_res = train_hc(X_train, y_train, X_val, y_val, args, rng)
+
+    # To use the spectral clustering model, we need to generate the confusion
+    # matrix for the validation set and then pass this as an argument to the
+    # function
+    proba_pred = k_res['final_model'].predict(X_val)
+    y_pred = proba_pred.argmax(axis=1)
+    M = confusion_matrix(y_val, y_pred)
+    A = .5 * (M + M.T)
+    k = k_res['label_groups'].shape[1]
+    spectral_res = spectral_model(X_train, y_train, X_val, y_val, k,
+                                  rng, args['estimator'], args['features'],
+                                  affinity_mat=A)
+
+    # Since we had the initial training time from the HC, we need to add this
+    # value to the spectral_res object
+    n = len(k_res['all_models'])
+    train_time = sum((k_res['all_models'][i]['train_time'] for i in range(n)))
+    cluster_time = sum((k_res['all_models'][i]['cluster_time'] for i in range(n)))
+    spectral_res['train_time'] += train_time
+    spectral_res['cluster_time'] += cluster_time
+
+    # Finally for the experiment generation process to work we have to
+    # re-set the group algorithm back to its original value
+    args['group_algo'] = group_algo
+    return get_hc_res(spectral_res, X_test, args)
 
 
 def save_fc_res(fc_res: dict, wd: str):
@@ -460,7 +521,8 @@ def run_model(args: dict, datapath: str):
     savepath = os.path.join(wd, "test_labels.csv")
     rng = np.random.RandomState(args["run_num"])
     if "downsample_prop" in args.keys():
-        data_dict = prep_data(datapath, savepath, rng, args["downsample_prop"])
+        data_dict = prep_data(datapath, savepath, rng,
+                              downsample_prop=args["downsample_prop"])
     else:
         data_dict = prep_data(datapath, savepath, rng)
 
@@ -474,12 +536,17 @@ def run_model(args: dict, datapath: str):
         save_fc_res(res, wd)
 
     else:
-        if re.search(r'kmm|lp|comm.*', args['group_algo']):
+        regex1 = r'kmm|lp|comm'
+        regex2 = r'-sc'
+        group_algo = args['group_algo']
+        if re.search(regex1, group_algo) and not re.search(regex2, group_algo):
             res = fit_hc(data_dict, rng, args)
-        elif args['group_algo'] == 'spectral':
+        elif re.search(regex1, group_algo) and re.search(regex2, group_algo):
+            res = fit_spectral_gen(data_dict, rng, args)
+        elif group_algo == 'spectral':
             res = fit_spectral(data_dict, rng, args)
         else:
-            res = {}
+            raise ValueError('Invalid grouping algorithm')
 
         save_hc_res(res, wd)
 

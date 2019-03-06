@@ -1,11 +1,12 @@
 #' Creates the Node Top 1 plot to compare the various hierarchical classifiers
 #'
 #' @param wd Working directory to find the data
+#' @param ... Additional arguments that can be passed for filtering
 #'
 #' @return Nothing; saves the plot to disk
 #' @importFrom rlang .data
 #' @export
-build_nt1 = function(wd) {
+build_nt1 = function(wd, ...) {
   # Get the bootstrap results and DataFrame mapping the experiment settings
   boot_df = readr::read_csv(file.path(wd, 'boot_res.csv'),
                             col_types=readr::cols())
@@ -25,6 +26,12 @@ build_nt1 = function(wd) {
   metric_names = c("node_top1" = "Node Top 1")
   estimator_names = c("log" = "LR", "rf" = "RF", 'knn' = 'KNN')
 
+  # Check for any additional filtering that needs to be done via the ...
+  # argument; we're assuming that a list is passed that provides the
+  # col_name and the value that we want to filter with !=
+  addl_args = list(...)
+  df = filter_df(df, addl_args)
+
   # Create the NT1 plot
   p = ggplot2::ggplot(df, ggplot2::aes(x=.data$value, color=.data$method)) +
     ggplot2::geom_density(size=1) +
@@ -41,15 +48,14 @@ build_nt1 = function(wd) {
                                          'HC-SC' = '#ff7f00')) +
     ggplot2::theme_bw()
 
-  # Count the number of unique estimators in the data to scale the plot
-  # appropriately
-  n_estimators = length(unique(df$estimator))
+  # Check if a different name has been provided otherwise use the default
+  # "boot_distn.pdf"
+  save_path = get_plot_name(addl_args)
 
   # Save the plot to disk
   base_folder = basename(wd)
-  filename = paste(base_folder, 'nt1.pdf', sep='_')
+  filename = paste(base_folder, save_path, sep='-')
   filepath = file.path(wd, 'figures', filename)
-  R.devices::suppressGraphics(ggplot2::ggsave(filepath, plot=p, scale=0.7,
-                                              height=(4 * n_estimators),
-                                              width=12))
+  R.devices::suppressGraphics(ggplot2::ggsave(filepath, plot=p, scale=0.5,
+                                              height=10, width=16))
 }

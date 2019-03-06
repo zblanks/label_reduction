@@ -4,7 +4,7 @@
 \alias{make_plot}
 \title{Helper function to make the time comparison plot}
 \usage{
-make_plot(df, wd, metric)
+make_plot(df, wd, metric, addl_args)
 }
 \arguments{
 \item{df}{DataFrame containing the data needed to generate the plot}
@@ -12,6 +12,8 @@ make_plot(df, wd, metric)
 \item{wd}{Location to save the plot}
 
 \item{metric}{Which metric to use for the time comparison plot}
+
+\item{addl_args}{Additional arguments passed by ...}
 }
 \value{
 ggplot2 object

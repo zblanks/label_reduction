@@ -12,7 +12,7 @@ def get_id(file: str) -> str:
     Gets the unique IDs from the file string
     """
     file_base = os.path.basename(file)
-    return re.sub(r"hc_|f_|.csv", "", file_base)
+    return re.sub(r"hc_|f_|.npy", "", file_base)
 
 
 def compute_entropy(P: np.ndarray, Y: np.ndarray, idx_list: list,
@@ -57,7 +57,7 @@ def compute_entropy(P: np.ndarray, Y: np.ndarray, idx_list: list,
 
     # Put the results in a DataFrame to work with them more easily
     uniq_labels = np.arange(n)
-    uniq_labels = np.append(uniq_labels, ["all"])
+    uniq_labels = np.append(uniq_labels, [-1])
 
     return pd.DataFrame(
         {"id": run_id, "label": np.tile(uniq_labels, 3),
@@ -81,7 +81,7 @@ def get_leaf_stability(files: list, idx_list: list,
     # in parallel to decrease computation time
     print("Getting probability matrices")
     with Parallel(n_jobs=-1, verbose=5) as p:
-        P_mats = p(delayed(np.loadtxt)(file) for file in files)
+        P_mats = p(delayed(np.load)(file) for file in files)
 
         # Compute the entropy values
         print("Computing entropy and log-loss values")

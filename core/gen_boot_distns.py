@@ -4,7 +4,6 @@ import re
 import os
 from sklearn.utils import resample
 from joblib import Parallel, delayed
-from scipy.stats import percentileofscore, gaussian_kde
 
 
 def combine_dfs(df_list: list) -> pd.DataFrame:
@@ -58,19 +57,28 @@ def infer_uniq_experiments(exp_df: pd.DataFrame, exp_vars: list):
 
     # Generate all of the query strings
     n_experiments = len(uniq_df)
-    n_vars = len(exp_vars)
     queries = [''] * n_experiments
     for i in range(n_experiments):
+        # If we're working with a flat classifier then we need to drop the
+        # group_algo part of the argument
+        if uniq_df.loc[i, 'method'] == 'f':
+            new_exp_vars = exp_vars[:]
+            new_exp_vars.remove('group_algo')
+        else:
+            new_exp_vars = exp_vars[:]
+
         # Define a placeholder for all of the query conditions
+        n_vars = len(new_exp_vars)
         query_conditions = [''] * n_vars
         for j in range(n_vars):
-            var = uniq_df.loc[i, exp_vars[j]]
+            var = uniq_df.loc[i, new_exp_vars[j]]
+
             if isinstance(var, str):
                 var = '"{}"'.format(var)
             else:
                 var = str(var)
 
-            query_conditions[j] = '(' + exp_vars[j] + ' == ' + var + ')'
+            query_conditions[j] = '(' + new_exp_vars[j] + ' == ' + var + ')'
 
         # Join the query string
         query_str = ' & '.join(query_conditions)
@@ -164,29 +172,29 @@ def compute_metric_value(prob_file: str, y_true: np.ndarray, metric: str,
     proba_mat = np.load(prob_file)
 
     # Compute the appropriate metric
-    if metric == 'leaf_top1':
-        val = top_k_accuracy(y_true, proba_mat, k=1)
-    elif metric == 'leaf_top3':
-        val = top_k_accuracy(y_true, proba_mat, k=3)
-    else:
-        # For the node_top1, we have to provide the random target vectors
-        # so that we can compare our values relative to a random classifier
-        n = len(y_true)
-        y_pred = proba_mat.argmax(axis=1)
-        true_val = np.sum(y_true == y_pred) / n
+    try:
+        if metric == 'leaf_top1':
+            val = top_k_accuracy(y_true, proba_mat, k=1)
+        elif metric == 'leaf_top3':
+            val = top_k_accuracy(y_true, proba_mat, k=3)
+        else:
+            # For the node_top1, we have to provide the random target vectors
+            # so that we can compare our values relative to a random classifier
+            n = len(y_true)
+            y_pred = proba_mat.argmax(axis=1)
+            true_val = np.sum(y_true == y_pred) / n
 
-        nsamples = kwargs['rand_targets'].shape[0]
-        rand_distn = np.array(
-            [np.sum(kwargs['rand_targets'][i, :].flatten() == y_pred) / n
-             for i in range(nsamples)]
-        )
-        print("True NT1:", true_val)
-        print("Rand NT1:", rand_distn[0:10])
-        print("Meta-class num:", proba_mat.shape[1])
+            nsamples = kwargs['rand_targets'].shape[0]
+            rand_distn = np.array(
+                [np.sum(kwargs['rand_targets'][i, :].flatten() == y_pred) / n
+                 for i in range(nsamples)]
+            )
 
-        # Compute where in the distribution the true values lies in the
-        # random distribution
-        val = percentileofscore(rand_distn, true_val)
+            # Compute where in the distribution the true values lies in the
+            # random distribution
+            val = true_val / rand_distn.mean()
+    except IndexError:
+        print(prob_file)
 
     return pd.DataFrame({'metric': [metric], 'value': [val]})
 
@@ -242,6 +250,7 @@ def compute_metrics(exp_df: pd.DataFrame, final_ids: np.ndarray,
             # vectors
             rand_targets = [permute_node_target(target_vecs[i])
                             for i in range(n)]
+            print(query_str)
             res_dfs = [
                 compute_metric_value(files[i]['node'], target_vecs[i],
                                      metric, rand_targets=rand_targets[i])
@@ -372,6 +381,7 @@ def gen_boot_df(wd: str, exp_vars: list, metrics: list, nsamples=1000):
     # Determine the unique experiments in the data and generate query
     # strings to subset the experiments DataFrame
     exp_queries = infer_uniq_experiments(exp_df, exp_vars)
+    print(exp_queries)
 
     # Grab the unique IDs from the final prediction files
     final_ids = get_final_ids(proba_path)

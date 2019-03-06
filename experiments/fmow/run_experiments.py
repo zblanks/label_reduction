@@ -11,7 +11,7 @@ def main():
     parser.add_argument("group_algo", type=str)
     parser.add_argument("estimator", type=str)
     parser.add_argument("--downsample_prop", type=float, nargs="?",
-                        default=0.5)
+                        default=0.25)
     parser.add_argument("--niter", type=int, nargs="?", default=10)
     parser.add_argument("--k_vals", type=int, nargs="*",
                         default=list(range(2, 62)))
@@ -20,6 +20,7 @@ def main():
     parser.add_argument('--use_meta', type=int, nargs='?', default=1)
     parser.add_argument('--metrics', type=str, nargs='*',
                         default='')
+    parser.add_argument('--features', type=str, nargs='?', default='pca')
     args = vars(parser.parse_args())
 
     # Get the data path depending on whether we're using meta-data or not

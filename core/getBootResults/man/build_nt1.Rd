@@ -4,10 +4,12 @@
 \alias{build_nt1}
 \title{Creates the Node Top 1 plot to compare the various hierarchical classifiers}
 \usage{
-build_nt1(wd)
+build_nt1(wd, ...)
 }
 \arguments{
 \item{wd}{Working directory to find the data}
+
+\item{...}{Additional arguments that can be passed for filtering}
 }
 \value{
 Nothing; saves the plot to disk

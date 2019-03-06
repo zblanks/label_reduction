@@ -95,11 +95,12 @@ combine_cols = function(df) {
 #' @param df DataFrame containing the data needed to generate the plot
 #' @param wd Location to save the plot
 #' @param metric Which metric to use for the time comparison plot
+#' @param addl_args Additional arguments passed by ...
 #'
 #' @return ggplot2 object
 #' @importFrom rlang .data
 #' @keywords internal
-make_plot = function(df, wd, metric) {
+make_plot = function(df, wd, metric, addl_args) {
   # Define the abbreviations for the various estimators
   estimator_names = c("log" = "LR", "rf" = "RF", 'knn' = 'KNN')
 
@@ -112,13 +113,24 @@ make_plot = function(df, wd, metric) {
   }
 
   # Now we can generate the series of plots comparing the experiments
-  df = dplyr::filter(df, .data$estimator != 'log')
-  p = ggplot2::ggplot(df, ggplot2::aes(x=log(.data$total_time), y=get(!!metric),
+  df = dplyr::select(df, c(.data$method, .data$estimator, .data$total_time,
+                           !!metric))
+  df = dplyr::group_by(df, .data$method, .data$estimator)
+  if (metric == 'leaf_top1') {
+    df = dplyr::summarize(df, metric_val = stats::median(.data$leaf_top1),
+                          med_time = stats::median(.data$total_time))
+  } else {
+    df = dplyr::summarize(df, metric_val = stats::median(.data$leaf_top3),
+                          med_time = stats::median(.data$total_time))
+  }
+
+  p = ggplot2::ggplot(df, ggplot2::aes(x=log(.data$med_time), y=.data$metric_val,
                                        color=.data$method)) +
-    ggplot2::geom_point() +
+    ggplot2::geom_point(size=6) +
     ggplot2::facet_grid(estimator ~ ., scales='free',
                         labeller=ggplot2::labeller(estimator=estimator_names)) +
-    ggplot2::labs(x='Log(Total Training Time)', y=paste(metric_name, 'Value'),
+    ggplot2::labs(x='Median Log(Total Training Time)',
+                  y=paste('Median', metric_name, 'Value'),
                   title='Training Time Comparison',
                   color='Training\nMethod') +
     ggplot2::scale_color_manual(values=c('FC' = '#e41a1c',
@@ -129,34 +141,47 @@ make_plot = function(df, wd, metric) {
     ggplot2::theme_bw()
 
   # Save the plot disk
+  savepath = get_plot_name(addl_args)
+  base_folder = basename(wd)
+  filename = paste(base_folder, savepath, sep='-')
+  filepath = file.path(wd, 'figures', filename)
   n_estimators = length(unique(df$estimator))
-  filepath = file.path(wd, 'figures', 'time_compare.pdf')
-  R.devices::suppressGraphics(ggplot2::ggsave(filepath, plot=p, scale=0.7,
-                                              height=(4 * n_estimators),
-                                              width=12))
+  R.devices::suppressGraphics(ggplot2::ggsave(filepath, plot=p, scale=0.5,
+                                              height=(10 * n_estimators),
+                                              width=16))
 }
 
 #' Generates the time comparison plot among the various methods
 #'
 #' @param wd Working directory to find the data
+#' @param ... Additional filtering arguments
 #' @param metric Which metric to use for the time comparison plot
 #'
 #' @return Nothing; saves the plot to disk
 #' @importFrom rlang .data
 #' @export
-gen_time_plot = function(wd, metric='leaf_top1') {
+gen_time_plot = function(wd, ..., metric='leaf_top1') {
   # To generate this plot we will need the experiment settings as well as
   # the timing results for the flat and HCs
-  exp_df = readr::read_csv(file.path(wd, 'experiment_settings.csv'))
-  fc_df = readr::read_csv(file.path(wd, 'fc_prelim_res.csv'))
-  search_df = readr::read_csv(file.path(wd, 'search_res.csv'))
-  raw_df = readr::read_csv(file.path(wd, 'raw_res.csv'))
+  exp_df = readr::read_csv(file.path(wd, 'experiment_settings.csv'),
+                           col_types=readr::cols())
+  fc_df = readr::read_csv(file.path(wd, 'fc_prelim_res.csv'),
+                          col_types=readr::cols())
+  search_df = readr::read_csv(file.path(wd, 'search_res.csv'),
+                              col_types=readr::cols())
+  raw_df = readr::read_csv(file.path(wd, 'raw_res.csv'),
+                           col_types=readr::cols())
 
   # Next we need to add the experimental settings to both of the DataFrames
   # (we can't join them just yet because fc_df does not have cluster_time)
   # and so this will lead to issues later if we join them now
   search_df = update_method(search_df, exp_df)
   fc_df = update_method(fc_df, exp_df)
+
+  # Before merging the DataFrames, do any additional filtering of the
+  # search_df to remove any undesired experiment settings from the visualization
+  addl_args = list(...)
+  search_df = filter_df(search_df, addl_args)
 
   # Get the final experiment IDs for the search_df so that we can add the
   # out-of-sample performance metrics
@@ -188,5 +213,5 @@ gen_time_plot = function(wd, metric='leaf_top1') {
 
   # Finally we can generate the time comparison plot
   df = tidyr::spread(df, .data$metric, .data$value)
-  make_plot(df, wd, metric)
+  make_plot(df, wd, metric, addl_args)
 }

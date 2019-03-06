@@ -4,10 +4,12 @@
 \alias{gen_boot_distn}
 \title{Produces the bootstrap distribution plot for a series of experiments}
 \usage{
-gen_boot_distn(wd)
+gen_boot_distn(wd, ...)
 }
 \arguments{
 \item{wd}{Working directory to find the data}
+
+\item{...}{Additional arguments that can be passed for filtering}
 }
 \value{
 Nothing; saves the plot to disk

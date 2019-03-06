@@ -4,10 +4,12 @@
 \alias{gen_time_plot}
 \title{Generates the time comparison plot among the various methods}
 \usage{
-gen_time_plot(wd, metric = "leaf_top1")
+gen_time_plot(wd, ..., metric = "leaf_top1")
 }
 \arguments{
 \item{wd}{Working directory to find the data}
+
+\item{...}{Additional filtering arguments}
 
 \item{metric}{Which metric to use for the time comparison plot}
 }

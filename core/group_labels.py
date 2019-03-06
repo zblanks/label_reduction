@@ -93,6 +93,17 @@ def _community_detection(V: np.ndarray, metric: str,
         # Convert the distance matrix into a similarity matrix
         S = 1 / np.exp(D)
 
+    # # To make the graph undirected we need to set the diagonal equal to zero
+    # np.fill_diagonal(S, 0.)
+
+    # # We can try the trick to make the graph unweighted as well though we
+    # # have to ignore the diagonal to do so; we'll do this with a mask; for
+    # # the trick we'll compute the average for each label (w/o the diagonal)
+    # # and then check if a value is below that threshold
+    # n = S.shape[0]
+    # no_diag = S[~np.eye(n, dtype=bool)].reshape(n, -1)
+    # S = np.where(S <= no_diag.mean(axis=1), 0, 1)
+
     # Infer the communities using the Louvain algorithm
     partition = community.best_partition(nx.Graph(S), random_state=rng)
 
