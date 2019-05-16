@@ -41,14 +41,14 @@ def build_cluster_distn(df: pd.DataFrame, label: int, k: int,
     return pd.DataFrame(data=data, columns=col_names)
 
 
-def build_distns(df: pd.DataFrame, use_meta: int) -> pd.DataFrame:
+def build_distns(df: pd.DataFrame, estimator: str) -> pd.DataFrame:
     """
     Builds all of the empirical cluster distributions for a given experiment
     value
     """
     # Subset the data so we are only working with the appropriate experimental
     # values
-    new_df = df.loc[df["use_meta"] == use_meta, :]
+    new_df = df.loc[df["estimator"] == estimator, :]
 
     # Get all of the unique label values so we can iterate over them and
     # go through all of the labels and get their distributions
@@ -77,7 +77,7 @@ def build_affinity_mat(df: pd.DataFrame) -> list:
 
 
 def get_clustering(affinity_mat: np.ndarray, k: int,
-                   use_meta: int) -> pd.DataFrame:
+                   estimator: str) -> pd.DataFrame:
     """
     Clusters the affinity matrix for a given value of k
     """
@@ -88,11 +88,11 @@ def get_clustering(affinity_mat: np.ndarray, k: int,
 
     # Get the resulting DataFrame in the expected format
     return pd.DataFrame({"k": np.repeat(k, n), "label": np.arange(n),
-                         "use_meta": np.repeat(use_meta, n),
+                         "estimator": np.repeat(estimator, n),
                          "group": clusters})
 
 
-def cluster_affinity_mat(affinity_mats: list, use_meta: int) -> pd.DataFrame:
+def cluster_affinity_mat(affinity_mats: list, estimator: str) -> pd.DataFrame:
     """
     Cluster the affinity matrices for all values of k
     """
@@ -101,7 +101,7 @@ def cluster_affinity_mat(affinity_mats: list, use_meta: int) -> pd.DataFrame:
 
     # Go through all feasible values of k and compute the clustering
     with Parallel(n_jobs=-1, verbose=5) as p:
-        cluster_dfs = p(delayed(get_clustering)(affinity_mat, k, use_meta)
+        cluster_dfs = p(delayed(get_clustering)(affinity_mat, k, estimator)
                         for (affinity_mat, k) in zip(affinity_mats, k_vals))
 
     return pd.concat(cluster_dfs, ignore_index=True)
@@ -115,10 +115,11 @@ def main():
     group = pd.read_csv("group_res.csv")
     settings = pd.read_csv("experiment_settings.csv")
     df = pd.merge(group, settings, how="inner", on="id")
+    df = df[(df['group_algo'] == 'kmm') & (df['estimator'] != 'log')]
 
     # Compute the cluster distributions for all use_meta cases
-    use_meta_vals = df.use_meta.unique()
-    distn_dfs = [build_distns(df, val) for val in use_meta_vals]
+    estimators = df.estimator.unique()
+    distn_dfs = [build_distns(df, val) for val in estimators]
 
     # Get all of the affinity matrices
     affinity_mats = [build_affinity_mat(distn_df) for distn_df in distn_dfs]
@@ -129,10 +130,10 @@ def main():
         pickle.dump(affinity_mats, p)
 
     # Get the clustering of the affinity matrices for all values of k and
-    # use_meta
+    # estimators
     cluster_dfs = [
-        cluster_affinity_mat(affinity_mat, use_meta)
-        for (affinity_mat, use_meta) in zip(affinity_mats, use_meta_vals)
+        cluster_affinity_mat(affinity_mat, estimator)
+        for (affinity_mat, estimator) in zip(affinity_mats, estimators)
     ]
 
     # Get the final clustering results

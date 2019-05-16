@@ -13,14 +13,34 @@ adjust_method = function(method, group_algo) {
   } else {
     # Adjust depending on the grouping algorithm
     if (group_algo == 'kmm') {
-      return('HC-KMC')
+      return('KMC')
     } else if (group_algo == 'comm') {
-      return('HC-CD')
+      return('CD')
     } else if (group_algo == 'lp') {
-      return('HC-LP')
+      return('LP')
+    } else if (group_algo == 'kmm-sc') {
+      return('KMC-SC')
     } else {
-      return('HC-SC')
+      return('SC')
     }
+  }
+}
+
+#' Helper function to map the basename of the working directory to an
+#' abbreviation for the plot title
+#'
+#' @param basename Basename of the working directory
+#'
+#' @return String to use for the plot title
+adjust_title = function(basename) {
+  if (basename == 'reddit') {
+    return("RSPCT")
+  } else if (basename == 'dogs') {
+    return("Stanford Dogs")
+  } else if (basename == "cifar") {
+    return("CIFAR100")
+  } else {
+    return("FMOW")
   }
 }
 
@@ -56,7 +76,7 @@ get_plot_name = function(addl_args) {
   if (!is.null(addl_args[['save_path']])) {
     save_path = addl_args$save_path
   } else {
-    save_path = 'boot_distn.pdf'
+    save_path = 'boot-distn.pdf'
   }
   return(save_path)
 }
@@ -97,19 +117,23 @@ gen_boot_distn = function(wd, ...) {
   addl_args = list(...)
   df = filter_df(df, addl_args)
 
+  # Adjust the plot title with the basename of the working directory
+  base_title = adjust_title(basename(wd))
+  title = paste(base_title, "Bootstrap Distribution Comparison")
+
   p = ggplot2::ggplot(df, ggplot2::aes(x=.data$value, color=.data$method)) +
     ggplot2::geom_density(size=1) +
     ggplot2::facet_grid(estimator ~ metric, scales='free',
                         labeller=ggplot2::labeller(metric=metric_names,
                                                    estimator=estimator_names)) +
     ggplot2::labs(x='Value', y='Density',
-                  title='Bootstrap Distribution Comparison',
-                  color='Training\nMethod') +
+                  title=title, color='Training\nMethod') +
     ggplot2::scale_color_manual(values=c('FC' = '#e41a1c',
                                          'HC-KMC' = '#377eb8',
                                          'HC-CD' = '#4daf4a',
                                          'HC-LP' = '#984ea3',
-                                         'HC-SC' = '#ff7f00')) +
+                                         'HC-SC' = '#ff7f00',
+                                         'HC-KMC-SC' = '#e6ab02')) +
     ggplot2::theme_bw()
 
   # Check if a different name has been provided otherwise use the default

@@ -102,7 +102,8 @@ combine_cols = function(df) {
 #' @keywords internal
 make_plot = function(df, wd, metric, addl_args) {
   # Define the abbreviations for the various estimators
-  estimator_names = c("log" = "LR", "rf" = "RF", 'knn' = 'KNN')
+  estimator_names = c("log" = "Logistic Reg.", "rf" = "Random Forest",
+                      'knn' = 'KNN')
 
   # Adjust the metric name for the title labels based on what is passed to
   # the function
@@ -117,27 +118,41 @@ make_plot = function(df, wd, metric, addl_args) {
                            !!metric))
   df = dplyr::group_by(df, .data$method, .data$estimator)
   if (metric == 'leaf_top1') {
-    df = dplyr::summarize(df, metric_val = stats::median(.data$leaf_top1),
-                          med_time = stats::median(.data$total_time))
+    df = dplyr::summarize(df, metric_val = stats::median(.data$leaf_top1,
+                                                         na.rm=T),
+                          med_time = stats::median(.data$total_time, na.rm=T))
   } else {
-    df = dplyr::summarize(df, metric_val = stats::median(.data$leaf_top3),
-                          med_time = stats::median(.data$total_time))
+    df = dplyr::summarize(df, metric_val = stats::median(.data$leaf_top3,
+                                                         na.rm=T),
+                          med_time = stats::median(.data$total_time, na.rm=T))
   }
 
+  # Adjust the title of the plot
+  base_title = adjust_title(basename(wd))
+  title = paste(base_title, "Training Time Comparison")
+
   p = ggplot2::ggplot(df, ggplot2::aes(x=log(.data$med_time), y=.data$metric_val,
-                                       color=.data$method)) +
-    ggplot2::geom_point(size=6) +
+                                       color=.data$method, shape=.data$method)) +
+    ggplot2::geom_point(size=8, stroke=2) +
     ggplot2::facet_grid(estimator ~ ., scales='free',
                         labeller=ggplot2::labeller(estimator=estimator_names)) +
     ggplot2::labs(x='Median Log(Total Training Time)',
                   y=paste('Median', metric_name, 'Value'),
-                  title='Training Time Comparison',
-                  color='Training\nMethod') +
+                  title=title) +
     ggplot2::scale_color_manual(values=c('FC' = '#e41a1c',
-                                         'HC-KMC' = '#377eb8',
-                                         'HC-CD' = '#4daf4a',
-                                         'HC-LP' = '#984ea3',
-                                         'HC-SC' = '#ff7f00')) +
+                                         'KMC' = '#377eb8',
+                                         'CD' = '#4daf4a',
+                                         'LP' = '#984ea3',
+                                         'SC' = '#ff7f00',
+                                         'KMC-SC' = '#e6ab02'),
+                                name='Training\nMethod') +
+    ggplot2::scale_shape_manual(values=c('FC' = 0,
+                                         'KMC' = 1,
+                                         'CD' = 2,
+                                         'LP' = 3,
+                                         'SC' = 4,
+                                         'KMC-SC' = 8),
+                                name='Training\nMethod') +
     ggplot2::theme_bw()
 
   # Save the plot disk
@@ -145,10 +160,8 @@ make_plot = function(df, wd, metric, addl_args) {
   base_folder = basename(wd)
   filename = paste(base_folder, savepath, sep='-')
   filepath = file.path(wd, 'figures', filename)
-  n_estimators = length(unique(df$estimator))
   R.devices::suppressGraphics(ggplot2::ggsave(filepath, plot=p, scale=0.5,
-                                              height=(10 * n_estimators),
-                                              width=16))
+                                              height=10, width=16))
 }
 
 #' Generates the time comparison plot among the various methods
@@ -172,6 +185,11 @@ gen_time_plot = function(wd, ..., metric='leaf_top1') {
   raw_df = readr::read_csv(file.path(wd, 'raw_res.csv'),
                            col_types=readr::cols())
 
+  # Ensure that the search_df value column is numeric (could have multiple
+  # write issues)
+  search_df = dplyr::mutate(search_df, value = as.numeric(.data$value))
+  search_df = stats::na.omit(search_df)
+
   # Next we need to add the experimental settings to both of the DataFrames
   # (we can't join them just yet because fc_df does not have cluster_time)
   # and so this will lead to issues later if we join them now
@@ -182,9 +200,15 @@ gen_time_plot = function(wd, ..., metric='leaf_top1') {
   # search_df to remove any undesired experiment settings from the visualization
   addl_args = list(...)
   search_df = filter_df(search_df, addl_args)
+  fc_df = filter_df(fc_df, addl_args)
 
   # Get the final experiment IDs for the search_df so that we can add the
   # out-of-sample performance metrics
+  search_df = dplyr::filter(search_df,
+                            !duplicated(dplyr::select(search_df,
+                                                      .data$id,
+                                                      .data$run_num,
+                                                      .data$metric)))
   exp_ids = get_final_ids(search_df)
 
   # Compute the total training time for the HC and change the metric train_time
@@ -212,6 +236,9 @@ gen_time_plot = function(wd, ..., metric='leaf_top1') {
   df = combine_cols(df)
 
   # Finally we can generate the time comparison plot
+  df = dplyr::filter(df,
+                     !duplicated(dplyr::select(df, .data$id, .data$run_num,
+                                               .data$metric)))
   df = tidyr::spread(df, .data$metric, .data$value)
   make_plot(df, wd, metric, addl_args)
 }

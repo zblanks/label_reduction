@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 from time import time
 import h5py
-from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.model_selection import train_test_split
 from sklearn.utils import resample
 from sklearn.metrics import confusion_matrix
 import os
@@ -172,6 +172,18 @@ def train_hc(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
                                               args['niter'])
         cluster_time = time() - start_time
 
+        # If we were unable to find a valid label partition (indicated by
+        # passing all -1s in the vector we need to handle this by feeding
+        # junk data and skipping over the iteration
+        if np.allclose(label_groups[i, :], np.array([-1] * nlabels)):
+            # There was no training time, the models are irrelevant, and
+            # the accuracy is zero
+            print("Unable to find valid partition with:", args['metrics'][i])
+            k_res[i]['train_time'] = 0.
+            k_res[i]['acc'] = 0.
+            k_res[i]['cluster_time'] = cluster_time
+            continue
+
         # Fixing the label groups, get the best HC over the hyper-parameter
         # space
         k_res[i] = hierarchical_model(
@@ -181,10 +193,10 @@ def train_hc(X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray,
 
         # Add the cluster time
         k_res[i]["cluster_time"] = cluster_time
-        print('Acc score:', k_res[i]['acc'])
 
     # Get the best model
     best_model = np.array([k_res[i]["acc"] for i in range(n)]).argmax()
+    print("Validation score:", k_res[best_model]['acc'])
 
     # Return all of the models so we can get validation results and the
     # best model so we can evaluate it out-of-sample
@@ -239,19 +251,22 @@ def split_data(X: np.ndarray, y: np.ndarray, test_size: float):
     label distribution
     """
 
-    splitter = StratifiedShuffleSplit(
-        n_splits=1, test_size=test_size, random_state=17
+    # splitter = StratifiedShuffleSplit(
+    #     n_splits=1, test_size=test_size, random_state=17
+    # )
+    #
+    # # Split the data
+    # idx = splitter.split(X, y)
+    # idx = [val for val in idx]
+    # train_idx = idx[0][0]
+    # test_idx = idx[0][1]
+    # X_train = X[train_idx]
+    # y_train = y[train_idx]
+    # X_test = X[test_idx]
+    # y_test = y[test_idx]
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=17
     )
-
-    # Split the data
-    idx = splitter.split(X, y)
-    idx = [val for val in idx]
-    train_idx = idx[0][0]
-    test_idx = idx[0][1]
-    X_train = X[train_idx]
-    y_train = y[train_idx]
-    X_test = X[test_idx]
-    y_test = y[test_idx]
     return X_train, y_train, X_test, y_test
 
 
@@ -326,6 +341,12 @@ def get_hc_res(k_res: dict, X_test: np.ndarray, args: dict):
     best_model = k_res['best_model']
     res = hc_pred(k_res['final_model'], X_test,
                   k_res['label_groups'][best_model, :])
+
+    # Check if the test labels are doing that much worse in relation to the
+    # validation model
+    y_pred = res['proba_pred'].argmax(axis=1)
+    y_test = pd.read_csv(os.path.join(args['wd'], 'test_labels.csv'), header=None).values.flatten()
+    print('Test acc:', np.where(y_pred == y_test)[0].shape[0] / y_test.shape[0])
 
     # Generate the run ID(s)
     ids = gen_id(args)
@@ -409,32 +430,41 @@ def fit_spectral_gen(data_dict: dict, rng: np.random.RandomState, args: dict):
     y_pred = proba_pred.argmax(axis=1)
     M = confusion_matrix(y_val, y_pred)
     A = .5 * (M + M.T)
-    k = len(np.unique(label_groups))
-    spectral_res, label_groups = spectral_model(
-        X_train, y_train, X_val, y_val, k, rng, args['estimator'],
-        args['features'], affinity_mat=A
-    )
 
-    # Since we had the initial training time from the HC, we need to add this
-    # value to the spectral_res object
-    n = len(k_res['all_models'])
-    train_time = sum([k_res['all_models'][i]['train_time'] for i in range(n)])
-    cluster_time = sum([k_res['all_models'][i]['cluster_time'] for i in range(n)])
-    spectral_res['train_time'] += train_time
-    spectral_res['cluster_time'] += cluster_time
+    # Search over the SC space to determine the best model
+    n = len(args['k_vals'])
+    label_groups = np.empty_like(k_res['label_groups'])
+    spectral_res = [dict()] * n
+
+    for i in range(n):
+        print('Searching over k = {}'.format(args['k_vals'][i]))
+        spectral_res[i], tmp_groups = spectral_model(
+            X_train, y_train, X_val, y_val, args['k_vals'][i], rng,
+            args['estimator'], args['features'], affinity_mat=A
+        )
+
+        label_groups[i, :] = tmp_groups
+
+    # Get the best model
+    best_model = np.array([spectral_res[i]["acc"] for i in range(n)]).argmax()
+    print("Validation score:", spectral_res[best_model]['acc'])
+
+    # We need to add the training and clustering time from the initial HC
+    # search to the spectral results
+    for i in range(n):
+        spectral_res[i]['train_time'] += k_res['all_models'][i]['train_time']
+        spectral_res[i]['cluster_time'] += k_res['all_models'][i]['cluster_time']
 
     # Finally for the experiment generation process to work we have to
     # re-set the group algorithm back to its original value
     args['group_algo'] = group_algo
 
-    # We also have to only provide a single k-value because only used the
-    # number corresponding to the best HC model
-    args['k_vals'] = [k]
+    # Return all of the models so we can get validation results and the
+    # best model so we can evaluate it out-of-sample
+    res = {"all_models": spectral_res,
+           "final_model": spectral_res[best_model]["models"],
+           "label_groups": label_groups, "best_model": best_model}
 
-    label_groups = label_groups.reshape(1, -1)
-
-    res = {'all_models': [spectral_res], 'final_model': spectral_res['models'],
-           'label_groups': label_groups, 'best_model': 0}
     return get_hc_res(res, X_test, args)
 
 

@@ -56,6 +56,50 @@ def _kmeans_mean(V: np.ndarray, k: int, rng: np.random.RandomState,
     return kmeans.fit_predict(V)
 
 
+def _similarity_conversion(D: np.ndarray) -> np.ndarray:
+    """
+    Alternative distance to similarity conversion
+    """
+    return 1 / (1 + D)
+
+
+def _convert_format(partition: dict) -> np.ndarray:
+    """
+    Converts the format provided by the Louvain method into an array
+    """
+    return np.array([partition[val] for val in partition.keys()])
+
+
+def _check_valid_communities(Z: np.ndarray, nlabels: int,
+                             rng: np.random.RandomState, **kwargs):
+    """
+    Checks if the provided partition is valid; if not then if a distance
+    matrix has been given then we will try with a different conversion
+    otherwise we'll return junk
+    """
+
+    # A valid Z matrix is one where the number of meta-classes is less than
+    # the number of labels
+    if len(np.unique(Z)) < nlabels:
+        return Z
+    else:
+        # Check if a distance matrix has been given; if it has we can try
+        # can again
+        if 'D' in kwargs:
+            S = _similarity_conversion(kwargs['D'])
+            partition = community.best_partition(nx.Graph(S), random_state=rng)
+            partition = _convert_format(partition)
+
+            # Check to make sure the new partition is valid
+            if len(np.unique(partition)) < nlabels:
+                return partition
+
+        # Otherwise the input is either an RBF (and thus we can't fix it)
+        # or the correction didn't work and thus and we have to return junk
+        # which we'll handle on the backend
+        return np.array([-1] * nlabels)
+
+
 def _community_detection(V: np.ndarray, metric: str,
                          rng: np.random.RandomState):
     """
@@ -69,6 +113,11 @@ def _community_detection(V: np.ndarray, metric: str,
     # We're working directly with a similarity metric
     if 'rbf' in metric:
         S = rbf_kernel(V)
+        partition = community.best_partition(nx.Graph(S), random_state=rng)
+        partition = _convert_format(partition)
+
+        # Check to make sure the partition is valid
+        partition = _check_valid_communities(partition, V.shape[0], rng)
 
     # Otherwise we're working with a distance metric and need to
     # treat it differently
@@ -92,24 +141,16 @@ def _community_detection(V: np.ndarray, metric: str,
 
         # Convert the distance matrix into a similarity matrix
         S = 1 / np.exp(D)
+        partition = community.best_partition(nx.Graph(S), random_state=rng)
+        partition = _convert_format(partition)
 
-    # # To make the graph undirected we need to set the diagonal equal to zero
-    # np.fill_diagonal(S, 0.)
-
-    # # We can try the trick to make the graph unweighted as well though we
-    # # have to ignore the diagonal to do so; we'll do this with a mask; for
-    # # the trick we'll compute the average for each label (w/o the diagonal)
-    # # and then check if a value is below that threshold
-    # n = S.shape[0]
-    # no_diag = S[~np.eye(n, dtype=bool)].reshape(n, -1)
-    # S = np.where(S <= no_diag.mean(axis=1), 0, 1)
-
-    # Infer the communities using the Louvain algorithm
-    partition = community.best_partition(nx.Graph(S), random_state=rng)
+        # Check that the partition is valid; otherwise try to correct it
+        partition = _check_valid_communities(partition, V.shape[0], rng,
+                                             D=D)
 
     # Convert the output to an array so it's in the same format as other
     # return results
-    return np.array([partition[val] for val in partition.keys()])
+    return partition
 
 
 def group_labels(X: np.ndarray, y: np.ndarray, k: int,

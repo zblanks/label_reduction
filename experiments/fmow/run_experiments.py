@@ -17,10 +17,10 @@ def main():
                         default=list(range(2, 62)))
     parser.add_argument("--wd", type=str, nargs="?",
                         default="/pool001/zblanks/label_reduction_data/fmow")
-    parser.add_argument('--use_meta', type=int, nargs='?', default=1)
+    parser.add_argument('--use_meta', type=int, nargs='?', default=0)
     parser.add_argument('--metrics', type=str, nargs='*',
                         default='')
-    parser.add_argument('--features', type=str, nargs='?', default='pca')
+    parser.add_argument('--features', type=str, nargs='?', default='lda')
     args = vars(parser.parse_args())
 
     # Get the data path depending on whether we're using meta-data or not

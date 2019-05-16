@@ -32,6 +32,10 @@ build_nt1 = function(wd, ...) {
   addl_args = list(...)
   df = filter_df(df, addl_args)
 
+  # Adjust the title of the plot with the basename of the working directory
+  base_title = adjust_title(basename(wd))
+  title = paste(base_title, "Node Top 1 Comparison")
+
   # Create the NT1 plot
   p = ggplot2::ggplot(df, ggplot2::aes(x=.data$value, color=.data$method)) +
     ggplot2::geom_density(size=1) +
@@ -39,13 +43,13 @@ build_nt1 = function(wd, ...) {
                         labeller=ggplot2::labeller(metric=metric_names,
                                                    estimator=estimator_names)) +
     ggplot2::labs(x='Value', y='Density',
-                  title='Node Top 1 Comparison',
-                  color='Hierarchical\nMethod') +
+                  title=title, color='Hierarchical\nMethod') +
     ggplot2::scale_color_manual(values=c('FC' = '#e41a1c',
                                          'HC-KMC' = '#377eb8',
                                          'HC-CD' = '#4daf4a',
                                          'HC-LP' = '#984ea3',
-                                         'HC-SC' = '#ff7f00')) +
+                                         'HC-SC' = '#ff7f00',
+                                         'HC-KMC-SC' = '#e6ab02')) +
     ggplot2::theme_bw()
 
   # Check if a different name has been provided otherwise use the default

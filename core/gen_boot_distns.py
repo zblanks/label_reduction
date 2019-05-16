@@ -195,6 +195,7 @@ def compute_metric_value(prob_file: str, y_true: np.ndarray, metric: str,
             val = true_val / rand_distn.mean()
     except IndexError:
         print(prob_file)
+        val = -1.
 
     return pd.DataFrame({'metric': [metric], 'value': [val]})
 
@@ -222,7 +223,7 @@ def compute_metrics(exp_df: pd.DataFrame, final_ids: np.ndarray,
     # of some bad indices and thus need to adjust the target vectors
     n = len(files)
     exp_method = sub_df['method'].values[0]
-    if exp_method == 'hci':
+    if (exp_method == 'hci') and (metric != 'node_top1'):
         idx_vecs = [np.load(files[i]['idx']) for i in range(n)]
         target_vecs = [y_true[idx] for idx in idx_vecs]
     else:
@@ -353,6 +354,22 @@ def get_final_ids(proba_path: str):
     return np.unique(final_ids)
 
 
+def fix_entries(group_df: pd.DataFrame, nlabels: int, group_path: str):
+    """
+    Fixes the entries in the group DataFrame which may have been combined
+    due to writing issues
+    """
+
+    sub_df = group_df.groupby('id', as_index=False)['label'].count()
+    bad_ids = sub_df.loc[sub_df['label'] < nlabels, 'id']
+    bad_idx = group_df[group_df['id'].isin(bad_ids)].index
+    group_df.drop(index=bad_idx, inplace=True)
+
+    # Save the result to disk so that this is no longer an issue
+    group_df.to_csv(group_path, index=False)
+    return group_df
+
+
 def gen_boot_df(wd: str, exp_vars: list, metrics: list, nsamples=1000):
     """
     Generates the bootstrap DataFrame so we can visualize the results
@@ -370,7 +387,11 @@ def gen_boot_df(wd: str, exp_vars: list, metrics: list, nsamples=1000):
 
     # We need the experiment settings to infer the unique experiments
     exp_df = pd.read_csv(exp_path)
-    group_df = pd.read_csv(group_path)
+    group_df = pd.read_csv(group_path, error_bad_lines=False)
+
+    # Fix potential issues with the group DataFrame
+    nlabels = len(np.unique(y_true))
+    group_df = fix_entries(group_df, nlabels, group_path)
 
     # In the event that we have run the same experiment (i.e. maybe we updated
     # the algorithm) we need to check for duplicates with respect to the ID
@@ -381,7 +402,6 @@ def gen_boot_df(wd: str, exp_vars: list, metrics: list, nsamples=1000):
     # Determine the unique experiments in the data and generate query
     # strings to subset the experiments DataFrame
     exp_queries = infer_uniq_experiments(exp_df, exp_vars)
-    print(exp_queries)
 
     # Grab the unique IDs from the final prediction files
     final_ids = get_final_ids(proba_path)

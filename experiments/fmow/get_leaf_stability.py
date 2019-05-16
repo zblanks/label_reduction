@@ -19,15 +19,17 @@ def main():
     files = hc_files + f_files
 
     # Get the indices that correspond to each unique label
-    labels = pd.read_csv(os.path.join(args["wd"], "test_labels.csv"))
-    uniq_labels = np.sort(labels["label"].unique())
+    labels = pd.read_csv(os.path.join(args["wd"], "test_labels.csv"),
+                         header=None)
+    labels = labels.values.flatten()
+    uniq_labels = np.sort(np.unique(labels))
     idx_list = [[]] * len(uniq_labels)
     for (i, label) in enumerate(uniq_labels):
-        idx_list[i] = np.where(labels["label"] == label)[0]
+        idx_list[i] = np.where(labels == label)[0]
 
     # One-hot encode the labels
     encoder = OneHotEncoder(n_values=len(uniq_labels))
-    Y = encoder.fit_transform(labels["label"].values.reshape(-1, 1))
+    Y = encoder.fit_transform(labels.reshape(-1, 1))
 
     # Compute the entropy for each of the probability matrices
     df = get_leaf_stability(files, idx_list, Y)
